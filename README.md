@@ -30,7 +30,7 @@ Rscript plot_umap_simplified_multimodules.R [options]
 | Option | Description |
 |--------|-------------|
 | `--umap_1` | Path to a **tab-separated** UMAP file for Pop 1. Expects columns **`UMAP_1`** and **`UMAP_2`**. If your file uses **`UMAP_0`** and **`UMAP_1`** instead, the script renames them automatically. |
-| `--master_1` | Path to the **Master Annotations TSV** for Pop 1 (see [Master Annotation file](#master-annotation-file)). |
+| `--master_1` | Path to the **Master Table file** for Pop 1 . |
 | `--modules_1` | **Comma-separated** list of module IDs for Pop 1 (e.g. `M_13916,M_20000`). Use `NA` as a placeholder to skip a slot in dual mode. |
 
 ---
@@ -40,7 +40,7 @@ Rscript plot_umap_simplified_multimodules.R [options]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--umap_2` | *(none)* | Path to UMAP TSV for Pop 2. |
-| `--master_2` | *(none)* | Path to Master Annotations TSV for Pop 2. |
+| `--master_2` | *(none)* | Path to **Master Table file** Pop 2. |
 | `--modules_2` | *(none)* | Comma-separated module IDs for Pop 2. Must contain the **same number of items** as `--modules_1`. |
 | `--name_2` | `Pop2` | Display name for Pop 2 shown in panel titles. |
 
@@ -155,11 +155,11 @@ Rscript plot_umap_simplified_multimodules.R \
   --umap_1 pop1_umap.tsv \
   --master_1 pop1_master.tsv \
   --modules_1 M_13916,M_20000 \
-  --name_1 "European" \
+  --name_1 "UKB" \
   --umap_2 pop2_umap.tsv \
   --master_2 pop2_master.tsv \
   --modules_2 M_13916,M_20000 \
-  --name_2 "African"
+  --name_2 "GH"
 ```
 
 **With reference panel and PNG output:**
