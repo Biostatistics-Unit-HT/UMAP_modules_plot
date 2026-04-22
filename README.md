@@ -11,7 +11,6 @@ Each CS of a module produces **one row** of the final grid with up to three pane
 - **LocusZoom** – `-log10(P)` vs genomic position, with
   - the **module-level most-likely SNP** (from the master table, or the top `-log10(P)` SNP when no module is provided) highlighted as a purple diamond; the same SNP anchors the LD r² colouring;
   - LD r² bins (`<0.2` navy, `0.2-0.4` light blue, `0.4-0.6` green, `0.6-0.8` orange, `≥0.8` red, `NA` gray) drawn as classic LocusZoom colours with bin-dependent point sizes so high-LD points stand out;
-  - a gene-body track of every *protein-coding* gene in the window (focal eGene in red, others in navy; optionally restricted by `--gene_list`);
   - the bottom-most LZ row of a module emits a zoom‑out connector strip that fans toward the merged annotation box below.
 - **Beta UMAP** – the population's UMAP coloured by the per-cell-type effect size for the current (cell, gene). Only drawn when **both** `--umap` and `--master` are provided.
 - **Coloc Z-scores** – QTL‑Z vs disease‑Z scatter for the colocalised credible sets.
@@ -35,7 +34,6 @@ Rscript plot_umap_simplified_multimodules_one_side.R \
   --z_files       icd10_j15_zscore_merge_notnull.csv \
   --lz_files      j15_locuszoom_ENSG00000101546.csv \
   --gtf           gencode.v49.annotation.gtf \
-  --gene_list     gene_list_j15.csv \
   --annotations   homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
   --zoom_window   5000 \
   --out           umap_GH_J15.pdf \
@@ -214,21 +212,9 @@ Every distinct `feature_type` across all supplied files becomes its own lane (ro
 
 `--zoom_window N` (default `5000`) controls the half‑width in bp of the zoom panel around the lead SNP.
 
-### 9. `--gene_list` – gene‑track whitelist (CSV) *(optional)*
-
-CSV with two columns, `CELL,GENE` (header required). `GENE` is a bare Ensembl ID (without version, e.g. `ENSG00000101546`). The script strips any `.N` suffix from the GTF's `gene_id` before matching, so GENCODE cache entries like `ENSG00000186092.7` still work.
-
-```csv
-CELL,GENE
-T_CD4_CM,ENSG00000060069
-T_CD4_CM,ENSG00000101544
-T_CD4_CM,ENSG00000101546
-...
-```
-
 When plotting a row for cell `X`, only genes whose `CELL == X` row exists in this file (by `GENE`) are drawn as arrows in the LocusZoom gene track. If the file has no rows for the current cell, the whitelist is disabled for that row (every gene in the window is drawn) and a notice is logged.
 
-### 10. `--cell` / `--gene` – per‑module pair filters *(optional)*
+### 9. `--cell` / `--gene` – per‑module pair filters *(optional)*
 
 Comma‑separated lists applied to the distinct `(cell, gene)` pairs discovered in the master table for each module.
 
@@ -237,7 +223,7 @@ Comma‑separated lists applied to the distinct `(cell, gene)` pairs discovered 
 
 Both filters are optional; omit them to plot every `(cell, gene)` pair the module has.
 
-### 11. `--colors` – cell‑type colour palette (TSV) *(only with `--show_ref`)*
+### 10. `--colors` – cell‑type colour palette (TSV) *(only with `--show_ref`)*
 
 Required only when you pass `--show_ref`. Tab separated with at least:
 
@@ -263,7 +249,6 @@ Required only when you pass `--show_ref`. Tab separated with at least:
 | `--lz_files`        |          | —               | LocusZoom P‑value CSVs (comma‑separated, one per module, `NA` to skip). Omit to drop the panel entirely. |
 | `--summary_table`   |          | —               | Per‑module disease summary CSV                                            |
 | `--gtf`             |          | —               | Raw GTF or pre‑built `.coding_genes.tsv`                                  |
-| `--gene_list`       |          | —               | CSV `CELL,GENE` whitelist filtering the LocusZoom gene track per cell     |
 | `--cell`            |          | —               | Comma‑separated list of cell types to keep                                |
 | `--gene`            |          | —               | Comma‑separated list of gene symbols or bare ENSGs to keep                |
 | `--annotations`     |          | —               | Comma‑separated annotation files (BED 4/5‑col or 9‑col GFF)               |
@@ -353,7 +338,6 @@ Rscript plot_umap_simplified_multimodules_one_side.R \
   --z_files       icd10_j15_zscore_merge_notnull.csv \
   --lz_files      j15_locuszoom_ENSG00000101546.csv \
   --gtf           gencode.v49.annotation.gtf \
-  --gene_list     gene_list_j15.csv \
   --annotations   homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
   --zoom_window   5000 \
   --out           umap_GH_J15.pdf \
@@ -368,8 +352,7 @@ Rscript plot_umap_simplified_multimodules_one_side.R \
 - Number of columns per row is `1 + has(z_files) + has(lz_files)` (1–3 columns). Columns you don't supply are not drawn at all (no empty slots left behind).
 - Each LocusZoom cell is itself a stack of sub‑panels:
   1. `-log10(P)` scatter with the highlighted lead SNP,
-  2. gene‑body track (genes stacked in lanes, focal eGene in red; filtered by `--gene_list` when supplied),
-  3. zoom annotation panel (only if `--annotations` is supplied). Discrete tracks draw solid blocks; continuous tracks (BED with a numeric 5th column) draw score‑scaled bars.
+  2. zoom annotation panel (only if `--annotations` is supplied). Discrete tracks draw solid blocks; continuous tracks (BED with a numeric 5th column) draw score‑scaled bars.
 
 Sizing scales automatically: page width = `n_cols × 6"`, page height = `n_rows × 4.5"` (minimum `5"`), where `n_rows` = number of surviving `(module, cell, gene)` triples.
 

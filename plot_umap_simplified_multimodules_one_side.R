@@ -54,7 +54,6 @@ option_list <- list(
   make_option("--anno_join_col", type = "character", default = NULL, help = "Column name in Master Annotations (if different from join_col)"),
   make_option("--gene_col", type = "character", default = "eGene_symbol", help = "Column name for gene symbol [default: %default]"),
   make_option("--gtf", type = "character", default = NULL, help = "Optional GENCODE GTF (e.g. gencode.v49.annotation.gtf) or a pre-built .coding_genes.tsv. When supplied, the LocusZoom gene track shows every protein-coding gene in the window."),
-  make_option("--gene_list", type = "character", default = NULL, help = "Optional CSV with columns CELL,GENE (ENSG without version). Restricts the LocusZoom gene track to genes in the list for the current cell."),
   make_option("--annotations", type = "character", default = NULL, help = "Optional comma-separated annotation file(s) to show in a zoom panel around the lead SNP. BED-style (chrom, start, end, feature_type [, score]) or full 9-col GFF. A numeric 5th column turns the lane into a continuous profile."),
   make_option("--zoom_window", type = "numeric", default = 5000, help = "Half-width in bp for the zoom annotation panel around the lead SNP [default: %default]"),
   make_option("--cell", type = "character", default = NULL, help = "Optional comma-separated list of cell types to keep. Default: plot every (cell, gene) pair a module has."),
@@ -154,21 +153,6 @@ if (!is.null(opt$annotations)) {
   cat(sprintf("Loaded %d annotation rows across %d track(s): %s\n",
               nrow(annotations_tbl), length(annotation_tracks),
               paste(annotation_tracks, collapse = ", ")))
-}
-
-gene_list_tbl <- NULL
-if (!is.null(opt$gene_list)) {
-  if (!file.exists(opt$gene_list)) stop(sprintf("Gene list file not found: %s", opt$gene_list))
-  gene_list_tbl <- fread(opt$gene_list)
-  needed_cols <- c("CELL", "GENE")
-  if (!all(needed_cols %in% names(gene_list_tbl))) {
-    stop(sprintf("--gene_list file must have columns CELL,GENE (found: %s)",
-                 paste(names(gene_list_tbl), collapse = ", ")))
-  }
-  gene_list_tbl[, CELL := as.character(CELL)]
-  gene_list_tbl[, GENE := sub("\\.\\d+$", "", as.character(GENE))]
-  cat(sprintf("Loaded gene-track whitelist with %d rows across %d cell(s).\n",
-              nrow(gene_list_tbl), length(unique(gene_list_tbl$CELL))))
 }
 
 sum_tbl <- if (!is.null(opt$summary_table)) fread(opt$summary_table) else NULL
@@ -388,17 +372,6 @@ for (i in seq_len(n_items)) {
     beta_title <- paste0(opt$name, " | ", this_cell, " | ", this_sym,
                          "\n[", mod_id, "]", snp_str, pval_str)
     
-    # Per-cell gene-track whitelist.
-    whitelist_ids <- NULL
-    if (!is.null(gene_list_tbl)) {
-      whitelist_ids <- unique(gene_list_tbl[CELL == this_cell, GENE])
-      if (length(whitelist_ids) == 0) {
-        cat(sprintf("Notice: --gene_list has no entries for cell %s; showing all genes in track for module %s.\n",
-                    this_cell, mod_id))
-        whitelist_ids <- NULL
-      }
-    }
-    
     if (has_lz) {
       # Build locus info. If the master annotation is available, use it for
       # gene coords / eGene symbol / strand; otherwise start from an empty
@@ -446,8 +419,7 @@ for (i in seq_len(n_items)) {
           if (!is.null(locus_info$gene_end) && !is.na(locus_info$gene_end))
             win_e <- max(win_e, locus_info$gene_end)
           genes_region <- get_genes_in_region(gtf_tbl, locus_info$chrom,
-                                              win_s, win_e,
-                                              whitelist_ids = whitelist_ids)
+                                              win_s, win_e)
         }
       }
       

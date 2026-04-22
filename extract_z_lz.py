@@ -60,9 +60,11 @@ for pheno,cs in zip(list_pheno,list_cs):
     #    z_scores[~np.isfinite(z_scores)] = 0  # Replace NaNs or Infs with 0 or NaN as preferred
     #abs_z = np.abs(z_scores)
     #mlog10p = -(np.log10(2) + norm.logsf(abs_z) / np.log(10))
+    gene_extracted_to_plot = tdb.query(attrs = ["SNPID","P"]).df[int(chrom.split("chr")[1]), cell, gene, start:end]
     gene_extracted = tdb.query(attrs = ["SNPID","P"]).df[int(chrom.split("chr")[1]), cell, gene, start:end]
     qtl_adata_lz = pd.DataFrame({"CS":cs ,"CHR": chrom, "CELL":cell, "GENE":gene,  "POS":gene_extracted["POS"],"P":gene_extracted["P"]})
     qtl_adata_lz.to_csv(f"{args.out}.csv", index = False, mode = 'a', header=None)
+    gene_extracted_to_plot.to_csv(f"{args.out}_genelist.csv", index = False, mode = 'a', header=None)
     snps_plink = pd.concat([snps_plink, gene_extracted["SNPID"]])
 
 snps_plink = snps_plink.drop_duplicates()
