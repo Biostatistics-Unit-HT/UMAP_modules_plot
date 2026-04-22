@@ -23,18 +23,31 @@ Every panel / file is optional. The **only hard requirement** is `--lz_files` OR
 ---
 
 ## Quick start
+Get the pvalue for the locus if you don't have already together with the LD (not mandatory this last one)
+
+```bash
+python extract_z_lz.py \
+  --qtl_module_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_hypr_modules_modules_JF_PIP_isCS99.h5ad \
+  --qtl_module M_18448 \
+  --out UMAP_lz_values \
+  --tiledb /project/cardinal/QTLs/TileDB_GH_f3_05_1_26/TileDB_tiledb_gh_meta_celltype2_f3_05_01_26 \
+  --qtl_cs_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_anndata_PIP_isCS99.h5ad \
+  --safeld /project/cardinal/safeld_storage/GH_5k/final_output \
+```
+
+This generate the files UMAP_lz_values.csv and UMAP_lz_values.raw
 
 ```bash
 Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap          UMAP_GH_QCed_f3_ct2.tsv \
+  --umap          /project/cardinal/QTLs/plot_umap_modules/UMAP_GH_QCed_f3_ct2.tsv \
   --master        freeze3_gh_cs_full_annotations.20260306.tsv \
   --modules       M_18448 \
   --name          GH \
   --anno_join_col cell \
-  --z_files       icd10_j15_zscore_merge_notnull.csv \
-  --lz_files      j15_locuszoom_ENSG00000101546.csv \
-  --gtf           gencode.v49.annotation.gtf \
-  --annotations   homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
+  --lz_files      UMAP_lz_values.csv \
+  --ld_files      UMAP_lz_values.raw \
+  --gtf           /project/cardinal/QTLs/plot_umap_modules/gencode.v49.annotation.gtf \
+  --annotations   /project/cardinal/QTLs/plot_umap_modules/homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
   --zoom_window   5000 \
   --out           umap_GH_J15.pdf \
   --raster
