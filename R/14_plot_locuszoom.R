@@ -131,43 +131,36 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   
   p_main <- ggplot(df[is_lead == FALSE], aes(x = POS / 1e6, y = logp))
   if (!is.null(ld_vec)) {
-    # Plot lower-LD points first so strongly-linked points (warm colours)
-    # sit on top of the pile. High-LD points are also drawn larger so the
-    # (sometimes lonely) green/orange/red dots are visible above the
-    # thousands of navy background points.
-    df_nonlead <- df[is_lead == FALSE][order(as.integer(ld_bin),
-                                             na.last = FALSE)]
-    ld_sizes <- c("<0.2"    = 1.4, "0.2-0.4" = 2.2, "0.4-0.6" = 2.7,
-                  "0.6-0.8" = 3.2, ">=0.8"   = 3.7, "NA"      = 1.4)
-    # Invisible anchor layer: one off-screen point per bin, drawn with
-    # shape 21 + matching fill so every LD colour is guaranteed to render
-    # in the legend even when a bin has zero real data points.
+    # One point size for every SNP; only fill reflects LD bin. Draw
+    # lower-LD points first so warmer colours sit on top.
+    PT_LZ <- 2.5
+    df_nonlead <- data.table::copy(df[is_lead == FALSE][order(as.integer(ld_bin),
+                                                              na.last = FALSE)])
+    # Invisible anchor layer: one off-screen point per bin so every LD
+    # colour appears in the fill legend even when a bin has zero SNPs.
     anchor_df <- data.frame(
       POS    = rep(min(df$POS, na.rm = TRUE) - 1e9,
                    length(LD_COLORS)),
       logp   = rep(-1, length(LD_COLORS)),
-      ld_bin = factor(names(LD_COLORS), levels = names(LD_COLORS))
-    )
+      ld_bin = factor(names(LD_COLORS), levels = names(LD_COLORS)),
+      stringsAsFactors = FALSE)
     p_main <- ggplot(df_nonlead, aes(x = POS / 1e6, y = logp)) +
       geom_point(data = anchor_df,
-                 aes(x = POS / 1e6, y = logp, fill = ld_bin, size = ld_bin),
+                 aes(x = POS / 1e6, y = logp, fill = ld_bin),
                  shape = 21, color = "white", stroke = 0.3,
-                 inherit.aes = FALSE, show.legend = TRUE) +
-      geom_point(aes(fill = ld_bin, size = ld_bin), shape = 21,
-                 color = "white", alpha = 0.9, stroke = 0.3) +
+                 size = PT_LZ, inherit.aes = FALSE, show.legend = TRUE) +
+      geom_point(aes(fill = ld_bin), shape = 21,
+                 color = "white", alpha = 0.9, stroke = 0.3, size = PT_LZ) +
       scale_fill_manual(name = expression(r^2), values = LD_COLORS,
                         drop = FALSE, limits = names(LD_COLORS),
                         breaks = names(LD_COLORS),
                         guide = guide_legend(
                           override.aes = list(
                             shape  = 21,
-                            size   = 3.2,
+                            size   = PT_LZ,
                             stroke = 0.3,
                             color  = "white",
-                            fill   = unname(LD_COLORS)))) +
-      scale_size_manual(values = ld_sizes, limits = names(LD_COLORS),
-                        breaks = names(LD_COLORS),
-                        drop = FALSE, guide = "none")
+                            fill   = unname(LD_COLORS))))
   } else {
     p_main <- p_main +
       geom_point(shape = 21, fill = "#4F8EDC", color = "white",

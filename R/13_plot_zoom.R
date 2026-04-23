@@ -39,7 +39,9 @@ plot_zoom_annotations <- function(anno_win, chr_label, lead_pos, win_half,
           axis.title.x       = element_text(size = 9, face = "bold"),
           axis.text          = element_text(size = 8),
           panel.grid.minor   = element_blank(),
-          panel.grid.major.y = element_blank(),
+          # Light grid: horizontal lines per track row + faint verticals for bp.
+          panel.grid.major.y = element_line(color = "gray86", linewidth = 0.2),
+          panel.grid.major.x = element_line(color = "gray93", linewidth = 0.35),
           panel.border       = element_rect(color = "gray80", fill = NA, linewidth = 0.8))
   
   if (!is.null(anno_win) && nrow(anno_win) > 0) {
@@ -81,6 +83,9 @@ plot_zoom_annotations <- function(anno_win, chr_label, lead_pos, win_half,
                       label = "No annotations in window",
                       size = 3.2, color = "gray55", fontface = "italic")
   }
+  # Row guides on top of rects so each bar lines up with its y-axis label.
+  p <- p + geom_hline(yintercept = seq_len(n_tracks), colour = "gray58",
+                      linewidth = 0.2, alpha = 0.88)
   p + geom_vline(xintercept = lead_pos, linetype = "dashed",
                  color = "#8E24AA", alpha = 0.8, linewidth = 0.5)
 }
@@ -165,7 +170,8 @@ build_merged_zoom_box <- function(chr_label, lead_positions,
           axis.title.x       = element_text(size = 10, face = "bold"),
           axis.text          = element_text(size = 9),
           panel.grid.minor   = element_blank(),
-          panel.grid.major.y = element_blank(),
+          panel.grid.major.y = element_line(color = "gray86", linewidth = 0.2),
+          panel.grid.major.x = element_line(color = "gray93", linewidth = 0.35),
           panel.border       = element_rect(color = "gray80", fill = NA, linewidth = 0.8))
   
   if (!is.null(anno_win) && nrow(anno_win) > 0) {
@@ -204,6 +210,8 @@ build_merged_zoom_box <- function(chr_label, lead_positions,
                       label = "No annotations in merged window",
                       size = 3.2, color = "gray55", fontface = "italic")
   }
+  p <- p + geom_hline(yintercept = seq_len(n_tracks), colour = "gray58",
+                      linewidth = 0.2, alpha = 0.88)
   
   # Per-CS lead SNP dashed lines were removed at the user's request. Only
   # the module-level "most-likely SNP" line (below) is drawn on the merged
@@ -218,7 +226,8 @@ build_merged_zoom_box <- function(chr_label, lead_positions,
       lead  = as.numeric(extra_lead_pos),
       label = if (!is.na(extra_lead_label) && nzchar(extra_lead_label))
                 as.character(extra_lead_label)
-              else sprintf("most-likely SNP | %s",
+              else sprintf("chr%s:%s",
+                           sub("^chr", "", chr_label, ignore.case = TRUE),
                            format(extra_lead_pos, big.mark = ",", scientific = FALSE)),
       stringsAsFactors = FALSE
     )

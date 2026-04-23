@@ -532,9 +532,15 @@ for (i in seq_len(n_items)) {
                       mod_id, length(lead_bag),
                       if (length(lead_bag) > 1) "s" else ""),
       extra_lead_pos    = mod_master_snp_pos,
-      extra_lead_label  = if (!is.na(mod_master_snp_lab))
-                            paste0("module most-likely | ", mod_master_snp_lab)
-                          else NA_character_)
+      extra_lead_label  = {
+        lab <- NA_character_
+        if (!is.na(mod_master_snp_lab) && nzchar(mod_master_snp_lab) &&
+            !startsWith(mod_master_snp_lab, "most-likely SNP |"))
+          lab <- as.character(mod_master_snp_lab)
+        else if (!is.na(mod_master_snp_id) && nzchar(as.character(mod_master_snp_id)))
+          lab <- as.character(mod_master_snp_id)
+        lab
+      })
     # Heights: each CS row ~5 units, merged box ~2 units. Keeps the box
     # readable without dominating the figure. Wrapping `cs_grid` with
     # `wrap_elements()` keeps it atomic so `/` stacks two blocks rather
