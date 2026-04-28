@@ -2,9 +2,21 @@
 
 R script that builds **UMAP figures** with beta-colored panels for one or two populations side-by-side, supporting multiple modules in a single run. Gene names, SNP IDs, and p-values are extracted automatically from master annotation files. Output is **PDF** (default) or **PNG**, with **rasterization** of points enabled by default for large cell counts.
 
-## Requirements
+```
+[ LocusZoom ]   →   [ Beta UMAP ]   →   [ Coloc Z‑scores ]
+```
 
-Install these R packages before running:
+- **LocusZoom** – `-log10(P)` vs genomic position, with
+  - the **module-level most-likely SNP** (from the master table, or the top `-log10(P)` SNP when no module is provided) highlighted as a purple diamond; the same SNP anchors the LD r² colouring;
+  - LD r² bins (`<0.2` navy, `0.2-0.4` light blue, `0.4-0.6` green, `0.6-0.8` orange, `≥0.8` red, `NA` gray) drawn as classic LocusZoom colours with bin-dependent point sizes so high-LD points stand out;
+  - the bottom-most LZ row of a module emits a zoom‑out connector strip that fans toward the merged annotation box below.
+- **Beta UMAP** – the population's UMAP coloured by the per-cell-type effect size for the current (cell, gene). Only drawn when **both** `--umap` and `--master` are provided.
+- **Coloc Z-scores** – QTL‑Z vs disease‑Z scatter for the colocalised credible sets.
+- **Merged annotation box** (once per module, spans the full grid width)
+  – regulatory tracks overlapping the module’s window, with a dotted
+  orange line at the module-level most-likely SNP.
+
+Every panel / file is optional. The **only hard requirement** is `--lz_files` OR the classic `--umap` + `--master` + `--modules` triple. Columns disappear from the layout entirely when their file(s) are omitted (no empty placeholder slots).
 
 | Package      | Role                                      |
 |-------------|-------------------------------------------|
@@ -17,13 +29,14 @@ Install these R packages before running:
 | `ragg`      | PNG device (`agg_png`)                    |
 | `scattermore` | Fast rasterized scatter layers          |
 
-Run the script with:
+## Quick start
+Get the pvalue for the locus if you don't have already together with the LD (not mandatory this last one)
 
 ```bash
 Rscript plot_umap_simplified_multimodules.R [options]
 ```
 
----
+This generate the files UMAP_lz_values.csv and UMAP_lz_values.raw
 
 ## Required arguments (Pop 1)
 
@@ -74,14 +87,20 @@ Note the defaults carefully — PDF output and rasterization are **on** by defau
 
 ---
 
-## Input file expectations
+## Input files
+
+Everything is optional — the minimal run is just `--lz_files` (and `--out`). When a file is omitted, the corresponding panel is dropped from the grid (no empty placeholder). The table below lists the three "classic" inputs that were previously required; they now behave as described in the "Minimal vs full runs" section further below.
 
 ### UMAP file (`--umap_1`, `--umap_2`)
 
 - TSV with at least **`UMAP_1`**, **`UMAP_2`**, and the column named by **`--join_col`** (default `cell`).
 - Alternate naming **`UMAP_0`**, **`UMAP_1`** is supported and mapped to `UMAP_1` / `UMAP_2`.
 
-### Colors file (`--colors`)
+| column      | description                                       |
+|-------------|---------------------------------------------------|
+| `UMAP_1`    | first UMAP coordinate                             |
+| `UMAP_2`    | second UMAP coordinate                            |
+| `<celltype>`| a cell‑type label column (name via `--join_col`)  |
 
 - Only required when **`--show_ref`** is used.
 - Must include the **`--join_col`** column and **`color_ct2`** (hex color per group).
@@ -121,7 +140,94 @@ Each beta panel title is composed as:
 
 ---
 
-## Layout and output sizes
+## Optional side panels
+
+### 4. `--z_files` – Coloc Z‑score CSVs  *(enables the coloc panel)*
+
+Fully optional. If you do not pass `--z_files`, the Coloc Z‑scores column is not drawn at all (there is no empty slot in the layout).
+
+When supplied, pass a comma‑separated list, **same length and order as `--modules`**, one CSV per module. Use the literal string `NA` for a module that has no Z‑score file.
+
+Expected columns (auto‑detected, case‑insensitive):
+
+| column   | description                     |
+|----------|---------------------------------|
+| `snp`    | SNP identifier                  |
+| `z_qtl`  | QTL Z‑score                     |
+| `z_icd10` *or* `z_dis` | disease Z‑score    |
+
+Example:
+
+```csv
+snp,z_icd10,z_qtl
+chr18:79925373:C:T,4.26,-3.22
+chr18:79925702:A:G,-4.19, 3.30
+```
+
+### 5. `--lz_files` – LocusZoom P‑value CSVs  *(enables the LocusZoom panel)*
+
+Comma‑separated list, **same length and order as `--modules`** (one CSV per module). Use `NA` to skip a module.
+
+Two layouts are auto‑detected:
+
+1. **5 columns with header** — `CHR, CELL, GENE, POS, P`.
+2. **6 columns, no header** — `CS, CHR, CELL, GENE, POS, P`. The `CS`
+   string encodes the credible‑set lead SNP as `chr:pos:ref:alt` somewhere in it (e.g `chr18::GH_meta_cardinal::T_CD4_CM:ENSG00000101546::chr18:80005273:C:T::L1`).
+   When present, the embedded position is used as the lead SNP on the LocusZoom (overriding the master table's `most_likely_snp_pos`).
+
+| column | description                                                    |
+|--------|----------------------------------------------------------------|
+| `CS`   | (layout 2 only) credible‑set id carrying the lead SNP          |
+| `CHR`  | chromosome (plain `18` or `chr18`)                             |
+| `CELL` | cell type the association was computed in                      |
+| `GENE` | Ensembl gene ID (e.g. `ENSG00000101546`, version suffix OK)    |
+| `POS`  | genomic position (bp, 1‑based)                                 |
+| `P`    | **raw P‑value**; the script computes `-log10(P)` on the fly    |
+
+A single file may pool SNPs for **multiple `(CELL, GENE)` combinations** — the script automatically filters each file to the current pair it is plotting (matching `CELL` exactly and `GENE` with the ENSG version suffix stripped). If a file has only one cell/gene, that works too.
+
+Example (layout 2, no header):
+
+```csv
+chr18::GH_meta_cardinal::T_CD4_CM:ENSG00000101546::chr18:80005273:C:T::L1,chr18,T_CD4_CM,ENSG00000101546,79869986,0.254
+chr18::GH_meta_cardinal::T_CD4_CM:ENSG00000101546::chr18:80005273:C:T::L1,chr18,T_CD4_CM,ENSG00000101546,79870170,0.775
+...
+```
+
+### 6. `--summary_table` – per‑module disease summary (CSV)
+
+Optional. Used only to enrich the Beta panel title with the colocalised disease and its β / P. One row per module with any of:
+
+| column (case‑insensitive)                        | description                         |
+|--------------------------------------------------|-------------------------------------|
+| `module`                                         | module ID                           |
+| `coloc_trait`                                    | disease / trait label               |
+| `most_likely_snp`                                | disease lead SNP                    |
+| `most_likely_beta_disease` / `beta.*disease`     | disease β                           |
+| `most_likely_se_disease` / `se.*disease`         | disease SE (used to compute P)      |
+
+Modules whose β and SE are both exactly 0 in this table are skipped.
+
+### 7. `--gtf` – gene track for the LocusZoom panel *(optional but recommended)*
+
+Accepts **either**:
+
+1. A raw **GENCODE GTF** (e.g. `gencode.v49.annotation.gtf`).
+   The first call builds a small cache next to the GTF named
+   `<gtf>.coding_genes.tsv` (~20k rows, <1 min, runs once).
+   Subsequent calls load the cache instantly.
+2. A pre‑built cache TSV with header
+   `chrom\tstart\tend\tstrand\tgene_name\tgene_id`.
+   Loaded as‑is; the awk pre‑filter is skipped.
+
+When supplied, the LocusZoom gene track shows **every protein‑coding gene** overlapping the plotted window (stacked into lanes to avoid overlap), with the module's focal eGene coloured red. Without `--gtf`, only the focal
+eGene from the master table is drawn.
+
+### 8. `--annotations` – regulatory tracks for the zoom panel *(optional)*
+
+Comma‑separated list of annotation files. Each becomes extra lanes in the zoom panel underneath the gene track.
+
+Two formats are auto‑detected:
 
 | Mode | Layout | Width (inches) |
 |------|--------|----------------|
@@ -136,7 +242,9 @@ Height is `max(4.5 × n_rows, 5)` inches, where `n_rows` is the number of module
 
 ---
 
-## Example commands
+## Example runs
+
+### Minimal – LocusZoom only, no UMAP / master / modules
 
 **Minimal single-population (PDF, rasterized, no reference):**
 
@@ -190,13 +298,85 @@ Rscript plot_umap_simplified_multimodules.R \
 
 ---
 
-## Beta color scale
+## Output layout
+
+- One row of the grid per **(module, cell, gene)** triple (after any `--cell` / `--gene` filter).
+- Number of columns per row is `1 + has(z_files) + has(lz_files)` (1–3 columns). Columns you don't supply are not drawn at all (no empty slots left behind).
+- Each LocusZoom cell is itself a stack of sub‑panels:
+  1. `-log10(P)` scatter with the highlighted lead SNP,
+  2. zoom annotation panel (only if `--annotations` is supplied). Discrete tracks draw solid blocks; continuous tracks (BED with a numeric 5th column) draw score‑scaled bars.
 
 The beta panel uses a diverging **blue → white → yellow/orange/red** gradient symmetric around zero (`± max(|beta|)` in the plotted data). Missing betas after the join are coerced to **0** for plotting; `NA` in the scale is shown as **grey**.
 
 ---
 
-## Troubleshooting
+## Tips
+
+- If the run is slow because of very large UMAPs, lower `--max_cells` (default `250 000`) or keep rasterisation on (default).
+- Passing an already‑built `*.coding_genes.tsv` to `--gtf` is auto‑detected by its header (`chrom start end strand gene_name gene_id`) — no awk pre‑filter runs.
+- To change the order of annotation lanes, concatenate the files in the order you want in `--annotations`; the first‑seen feature types end up at the bottom of the zoom panel.
+- Continuous annotation scores are min‑max normalised **within each feature type in the current window**, so profiles fill their lane. If you need absolute values across modules, pre‑normalise the scores in your BED file.
+
+---
+
+## Generating the inputs with `extract_z_lz.py` (optional)
+
+The R script consumes ready-made `--lz_files`, `--ld_files`, and (optionally) `--z_files` CSVs. The companion Python script `extract_z_lz.py` pulls those tables straight out of an anndata / TileDB QTL store so you don't have to wire them up by hand. It is entirely optional — you can feed the R script anything with the expected columns.
+
+### What it produces
+
+Given one QTL module, the script writes:
+
+| file                   | purpose                                                          | where it plugs in     |
+|------------------------|------------------------------------------------------------------|-----------------------|
+| `<out>.csv`            | headerless `CS, CHR, CELL, GENE, POS, P` rows (the LZ format)    | `--lz_files`          |
+| `<out>.raw`            | plink2 `--export A include-alt` genotype dosages for every SNP  | `--ld_files`          |
+| `<out>_zscores.csv`    | `snp, z_disease, z_qtl` coloc table (only if `--dis_adata` set) | `--z_files`           |
+
+One call emits one set of files per module; the R script then accepts a comma-separated list of these (one per module) in the corresponding CLI flags.
+
+### Inputs
+
+| arg                  | what                                                               |
+|----------------------|--------------------------------------------------------------------|
+| `--qtl_module_adata` | H5AD with QTL modules (`.obs` has `phenotype_id` and `list_of_cs`) |
+| `--qtl_cs_adata`     | H5AD with per-CS SNP tables (`.var` has `chr`, `pos`; `.obs` has `chr`, `start`, `end`) |
+| `--tiledb`           | TileDB array with raw QTL P-values (queried by `(chr, cell, gene, start:end)`) |
+| `--qtl_module`       | Module id to extract (e.g. `M_18448`, `M_3934`)                   |
+| `--dis_adata`        | *(optional)* H5AD with disease fine-mapping, triggers the Z-score CSV |
+| `--dis_cs`           | *(optional)* disease CS name to align against the QTL            |
+| `--safeld`           | Path where a pgen file for ld are stored |
+| `--out`              | output prefix (no extension)                                      |
+
+### Example
+python extract_z_lz.py --qtl_module_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_hypr_modules_modules_JF_PIP_isCS99.h5ad --qtl_module M_3934 --out UMAP_lz_values --tiledb /project/cardinal/QTLs/TileDB_GH_f3_05_1_26/TileDB_tiledb_gh_meta_celltype2_f3_05_01_26 --qtl_cs_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_anndata_PIP_isCS99.h5ad --safeld /project/cardinal/safeld_storage/GH_5k/final_output
+```bash
+python extract_z_lz.py \
+  --qtl_module_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_hypr_modules_modules_JF_PIP_isCS99.h5ad \
+  --qtl_cs_adata     /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_anndata_PIP_isCS99.h5ad \
+  --tiledb           /project/cardinal/QTLs/TileDB_GH_f3_05_1_26/TileDB_tiledb_gh_meta_celltype2_f3_05_01_26 \
+  --qtl_module       M_18448 \
+  --dis_adata        /ssu/.../GH:gwas:ICD10codes_anndata.h5ad \
+  --dis_cs           "chr18::GH:gwas:ICD10codes::J15::chr18:80004668:A:T::L1" \
+  --out              UMAP_lz_values
+```
+
+This writes `UMAP_lz_values.csv`, `UMAP_lz_values.raw`, and
+`UMAP_lz_values_zscores.csv` that you can then feed straight into:
+
+```bash
+Rscript plot_umap_simplified_multimodules_one_side.R \
+  --lz_files UMAP_lz_values.csv \
+  --ld_files UMAP_lz_values.raw \
+  --z_files  UMAP_lz_values_zscores.csv \
+  --out      umap_M18448.pdf --raster
+```
+
+### Python dependencies
+You can use on the hpc the tdbsumstat conda environment or you need the following packages
+```bash
+pip install scanpy pandas tiledb scipy numpy
+```
 
 - **"Missing required arguments"** — Must provide all of `--umap_1`, `--master_1`, and `--modules_1`.
 - **"--colors required with --show_ref"** — Provide `--colors` when using `--show_ref`.
