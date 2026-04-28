@@ -1,8 +1,6 @@
-# UMAP + LocusZoom + Coloc plots
+# `plot_umap_simplified_multimodules.R`
 
-`plot_umap_simplified_multimodules_one_side.R` produces a composite figure for
-one or more fine‑mapped credible sets in a single population.
-Each CS of a module produces **one row** of the final grid with up to three panels:
+R script that builds **UMAP figures** with beta-colored panels for one or two populations side-by-side, supporting multiple modules in a single run. Gene names, SNP IDs, and p-values are extracted automatically from master annotation files. Output is **PDF** (default) or **PNG**, with **rasterization** of points enabled by default for large cell counts.
 
 ```
 [ LocusZoom ]   →   [ Beta UMAP ]   →   [ Coloc Z‑scores ]
@@ -20,53 +18,72 @@ Each CS of a module produces **one row** of the final grid with up to three pane
 
 Every panel / file is optional. The **only hard requirement** is `--lz_files` OR the classic `--umap` + `--master` + `--modules` triple. Columns disappear from the layout entirely when their file(s) are omitted (no empty placeholder slots).
 
----
+| Package      | Role                                      |
+|-------------|-------------------------------------------|
+| `ggplot2`   | Plotting                                  |
+| `dplyr`     | Data manipulation                         |
+| `data.table`| Fast TSV reading (`fread`)                |
+| `optparse`  | Command-line arguments                    |
+| `patchwork` | Combining panels                          |
+| `ggrepel`   | Non-overlapping labels on reference/beta  |
+| `ragg`      | PNG device (`agg_png`)                    |
+| `scattermore` | Fast rasterized scatter layers          |
 
 ## Quick start
 Get the pvalue for the locus if you don't have already together with the LD (not mandatory this last one)
 
 ```bash
-python extract_z_lz.py \
-  --qtl_module_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_hypr_modules_modules_JF_PIP_isCS99.h5ad \
-  --qtl_module M_18448 \
-  --out UMAP_lz_values \
-  --tiledb /project/cardinal/QTLs/TileDB_GH_f3_05_1_26/TileDB_tiledb_gh_meta_celltype2_f3_05_01_26 \
-  --qtl_cs_adata /ssu/bsssu/anndata_finemapping_repository/GH_meta_cardinal_F3_qtl_cis_07_01_anndata_PIP_isCS99.h5ad \
-  --safeld /project/cardinal/safeld_storage/GH_5k/final_output \
+Rscript plot_umap_simplified_multimodules.R [options]
 ```
 
 This generate the files UMAP_lz_values.csv and UMAP_lz_values.raw
 
-```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap          /project/cardinal/QTLs/plot_umap_modules/UMAP_GH_QCed_f3_ct2.tsv \
-  --master        freeze3_gh_cs_full_annotations.20260306.tsv \
-  --modules       M_18448 \
-  --name          GH \
-  --anno_join_col cell \
-  --lz_files      UMAP_lz_values.csv \
-  --ld_files      UMAP_lz_values.raw \
-  --gtf           /project/cardinal/QTLs/plot_umap_modules/gencode.v49.annotation.gtf \
-  --annotations   /project/cardinal/QTLs/plot_umap_modules/homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
-  --zoom_window   5000 \
-  --out           umap_GH_J15.pdf \
-  --raster
-```
+## Required arguments (Pop 1)
 
-The output is a multi‑page vector PDF by default (`--png` switches to PNG). Remove `--z_files` and the right‑most Z-plot for coloc disappears from the layout. Add `--cell "T_CD4_CM"` and/or `--gene "ENSG00.."` to restrict which `(cell, gene)` rows of a module are plotted.
+| Option | Description |
+|--------|-------------|
+| `--umap_1` | Path to a **tab-separated** UMAP file for Pop 1. Expects columns **`UMAP_1`** and **`UMAP_2`**. If your file uses **`UMAP_0`** and **`UMAP_1`** instead, the script renames them automatically. |
+| `--master_1` | Path to the **Master Table file** for Pop 1 . |
+| `--modules_1` | **Comma-separated** list of module IDs for Pop 1 (e.g. `M_13916,M_20000`). Use `NA` as a placeholder to skip a slot in dual mode. |
 
 ---
 
-## R dependencies
+## Optional arguments (Pop 2 — dual/side-by-side mode)
 
-```r
-install.packages(c(
-  "ggplot2", "dplyr", "data.table", "optparse",
-  "patchwork", "ggrepel", "ragg", "scattermore"
-))
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--umap_2` | *(none)* | Path to UMAP TSV for Pop 2. |
+| `--master_2` | *(none)* | Path to **Master Table file** Pop 2. |
+| `--modules_2` | *(none)* | Comma-separated module IDs for Pop 2. Must contain the **same number of items** as `--modules_1`. |
+| `--name_2` | `Pop2` | Display name for Pop 2 shown in panel titles. |
 
-Tested with R ≥ 4.3.
+---
+
+## General settings
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--colors` | *(none)* | Path to palette TSV. **Required only when `--show_ref` is used.** |
+| `--name_1` | `Pop1` | Display name for Pop 1 shown in panel titles. |
+| `--join_col` | `cell` | Column name in the UMAP file used to identify cell types. |
+| `--anno_join_col` | *(same as `--join_col`)* | Column name in the Master Annotations file if it differs from `--join_col`. |
+| `--gene_col` | `eGene_symbol` | Column name for the gene symbol in the Master Annotations file. |
+| `--out` | `umap_plot` | Output filename **prefix** (extension is added automatically). |
+| `--pt_size` | `0.25` | Point size for scatter layers. |
+| `--max_cells` | `250000` | If the data has more rows, a random subsample (seed `42`) is taken. |
+
+---
+
+## Toggle flags
+
+Note the defaults carefully — PDF output and rasterization are **on** by default, while the reference panel and label hiding are **off** by default:
+
+| Flag | Default | Effect when passed |
+|------|---------|--------------------|
+| `--png` | off (PDF is default) | Save output as **PNG** (300 DPI, white background) instead of PDF. |
+| `--no_raster` | off (raster is default) | **Disable** rasterized points; draw with standard `geom_point` instead. |
+| `--show_ref` | off (reference hidden) | Add a **reference UMAP** panel colored by cell type (requires `--colors`). |
+| `--no_labels` | off (labels shown) | **Hide** cell-type labels on beta panels. |
 
 ---
 
@@ -74,9 +91,10 @@ Tested with R ≥ 4.3.
 
 Everything is optional — the minimal run is just `--lz_files` (and `--out`). When a file is omitted, the corresponding panel is dropped from the grid (no empty placeholder). The table below lists the three "classic" inputs that were previously required; they now behave as described in the "Minimal vs full runs" section further below.
 
-### 1. `--umap` – UMAP coordinates table (TSV, *optional*)
+### UMAP file (`--umap_1`, `--umap_2`)
 
-One row per cell, tab separated. Expected columns:
+- TSV with at least **`UMAP_1`**, **`UMAP_2`**, and the column named by **`--join_col`** (default `cell`).
+- Alternate naming **`UMAP_0`**, **`UMAP_1`** is supported and mapped to `UMAP_1` / `UMAP_2`.
 
 | column      | description                                       |
 |-------------|---------------------------------------------------|
@@ -84,36 +102,41 @@ One row per cell, tab separated. Expected columns:
 | `UMAP_2`    | second UMAP coordinate                            |
 | `<celltype>`| a cell‑type label column (name via `--join_col`)  |
 
-If the file ships with `UMAP_0` / `UMAP_1` instead, they are renamed internally to `UMAP_1` / `UMAP_2`.
+- Only required when **`--show_ref`** is used.
+- Must include the **`--join_col`** column and **`color_ct2`** (hex color per group).
 
-The default cell‑type column is `cell`; change it with
-`--join_col <column_name>`.
+### Master Annotation file (`--master_1`, `--master_2`)
 
-### 2. `--master` – master credible-set annotations (TSV, *optional*)
+Used to extract **beta values**, gene names, SNP IDs, and p-values per module:
 
-Usually something like `freeze3_gh_cs_full_annotations.*.tsv`. One row per (module, cell type) with fine‑mapping info. When provided, this file drives the Beta UMAP (which needs `--umap` too), the gene-track eGene symbol, and the module-level most-likely SNP. When omitted, the script falls back to the top `-log10(P)` SNP in each LZ file as the module anchor. Columns consumed when present:
+- Must include a **`module`** column and the annotation join column (see `--anno_join_col`).
+- **Beta source priority**: `cs_top_snp_beta` → `most_likely_snp_beta` → `beta`.
+- If **`cs_max_pip`** exists, rows are sorted descending by it before one row per cell type is kept.
+- Optional columns: `cs_max_pip`, `most_likely_snp_rsID`, `most_likely_snp_chisq` (used to compute p-value), and the gene symbol column (see `--gene_col`; falls back to `eGene`).
 
-| column                        | used for                                           |
-|-------------------------------|----------------------------------------------------|
-| `module`                      | key to match `--modules`                           |
-| `<join_col>` or `--anno_join_col` | cell‑type label to join against the UMAP       |
-| `cs_top_snp_beta` / `most_likely_snp_beta` / `beta` | per cell‑type β shown on the Beta UMAP |
-| `eGene_symbol` (or `--gene_col`) / `eGene` | gene name in titles                       |
-| `eGene_start`, `eGene_end`, `eGene_strand`, `chrom` | focal eGene coords (LZ gene track) |
-| `most_likely_snp_rsID`, `most_likely_snp_pos`      | lead SNP used in LocusZoom         |
-| `most_likely_snp_chisq`       | exact P‑value in the Beta panel title              |
-| `cs_max_pip`                  | used to pick the "best" row when multiple exist    |
+---
 
-### 3. `--modules` – module IDs (*optional*)
+## Beta extraction logic
 
-Comma-separated list: `--modules "M_18448,M_11607,M_10171"`.
+For each module ID the `get_module_betas` function:
 
-Each module can have multiple `(cell, gene)` pairs in the master table (e.g. the same credible set mapping to several eGenes or cell types). The script enumerates those pairs and produces **one grid row per CS**. Use `--cell` and/or `--gene` to restrict them (see below). Without any filter every CS the module has is plotted.
+1. Filters the master annotation to rows where `module == mod_id`.
+2. If `cs_max_pip` is present, sorts rows descending by it.
+3. Deduplicates to **one row per `anno_join_col`** value.
+4. Selects beta using the priority chain above.
+5. Extracts gene symbol, SNP rsID, and p-value (computed from `most_likely_snp_chisq` via chi-squared with df = 1).
 
-**When `--modules` is omitted**, the script treats each `--lz_files`
-entry as one implicit module (ID auto-derived from the filename, e.g.
-`auto_UMAP_lz_values`) and uses the **top `-log10(P)` SNP in the file**
-as the module anchor (diamond + LD source).
+---
+
+## Panel title format
+
+Each beta panel title is composed as:
+
+```
+{PopName} | {GeneName}
+[{ModuleID}]
+{SNP_rsID} | P = {p-value}
+```
 
 ---
 
@@ -206,74 +229,16 @@ Comma‑separated list of annotation files. Each becomes extra lanes in the zoom
 
 Two formats are auto‑detected:
 
-- **BED‑style** (no header) — 4 required columns, with an optional numeric 5th `score` column:
+| Mode | Layout | Width (inches) |
+|------|--------|----------------|
+| Dual mode (Pop 1 + Pop 2) | 2-column grid, Pop 1 left / Pop 2 right per row | 14 |
+| Single mode with `--show_ref` | Reference panel left, beta grid right | `(cols + 1) × 6` |
+| Single mode without reference | Beta grid only | `cols × 6` |
 
-  ```
-  chrom  start     end       feature_type              [score]
-  18     80009802  80011199  promoter_flanking_region  0.73
-  ```
+Height is `max(4.5 × n_rows, 5)` inches, where `n_rows` is the number of module rows in the grid (i.e. `ceil(n_panels / cols)`).
 
-  - 4 columns → a **discrete** track (each feature drawn as a solid block).
-  - 5 columns with any numeric `score` → a **continuous** track: features
-    are drawn as bars whose height is proportional to `score`, normalised
-    within the track and window, so the lane looks like a distribution /
-    profile around the lead SNP.
-
-- **Standard 9‑column GFF/GTF** — `#` comment lines are skipped; column 1 is chromosome, column 3 is feature type, columns 4/5 are start/end, column 6 is interpreted as an optional score.
-
-Every distinct `feature_type` across all supplied files becomes its own lane (row), with a consistent lane order across modules/rows.
-
-`--zoom_window N` (default `5000`) controls the half‑width in bp of the zoom panel around the lead SNP.
-
-When plotting a row for cell `X`, only genes whose `CELL == X` row exists in this file (by `GENE`) are drawn as arrows in the LocusZoom gene track. If the file has no rows for the current cell, the whitelist is disabled for that row (every gene in the window is drawn) and a notice is logged.
-
-### 9. `--cell` / `--gene` – per‑module pair filters *(optional)*
-
-Comma‑separated lists applied to the distinct `(cell, gene)` pairs discovered in the master table for each module.
-
-- `--cell "T_CD4_CM,T_CD8_CM"` — keep only pairs whose cell is in the list.
-- `--gene "RBFA,ATP9B,ENSG00000101546"` — keep pairs whose `eGene_symbol` **or** bare `eGene` (ENSG) is in the list, so you can mix symbols and IDs in a single argument.
-
-Both filters are optional; omit them to plot every `(cell, gene)` pair the module has.
-
-### 10. `--colors` – cell‑type colour palette (TSV) *(only with `--show_ref`)*
-
-Required only when you pass `--show_ref`. Tab separated with at least:
-
-| column          | description                                 |
-|-----------------|---------------------------------------------|
-| `<join_col>`    | cell‑type label (same column as the UMAP)   |
-| `color_ct2`     | hex colour used in the reference UMAP       |
-
----
-
-## All CLI options
-
-| Option              | Required | Default         | What it does                                                              |
-|---------------------|----------|-----------------|---------------------------------------------------------------------------|
-| `--umap`            | ✔        | —               | UMAP coordinates TSV                                                      |
-| `--master`          | ✔        | —               | Master table from joint finemappping TSV                                       |
-| `--modules`         | ✔        | —               | Comma‑separated module IDs                                                |
-| `--name`            |          | `Pop`           | Display name used in panel titles                                         |
-| `--join_col`        |          | `celltype_2`    | Cell‑type column name in the UMAP                                         |
-| `--anno_join_col`   |          | `--join_col`    | Cell‑type column name in the master table (if different)           |
-| `--gene_col`        |          | `eGene_symbol`  | Gene‑symbol column in the master table                              |
-| `--z_files`         |          | —               | Coloc Z‑score CSVs (comma‑separated, one per module, `NA` to skip). Omit to drop the panel entirely. |
-| `--lz_files`        |          | —               | LocusZoom P‑value CSVs (comma‑separated, one per module, `NA` to skip). Omit to drop the panel entirely. |
-| `--summary_table`   |          | —               | Per‑module disease summary CSV                                            |
-| `--gtf`             |          | —               | Raw GTF or pre‑built `.coding_genes.tsv`                                  |
-| `--cell`            |          | —               | Comma‑separated list of cell types to keep                                |
-| `--gene`            |          | —               | Comma‑separated list of gene symbols or bare ENSGs to keep                |
-| `--annotations`     |          | —               | Comma‑separated annotation files (BED 4/5‑col or 9‑col GFF)               |
-| `--zoom_window`     |          | `5000`          | Half‑width in bp for the zoom annotation panel                            |
-| `--colors`          | (with `--show_ref`) | —    | Cell‑type colour palette TSV                                              |
-| `--show_ref`        |          | off             | Also render a reference UMAP on the left                                   |
-| `--no_labels`       |          | off             | Hide the cell‑type text labels on the Beta UMAP                            |
-| `--raster` (default)/`--no_raster` |  | raster on    | Rasterise the UMAP points for fast PDF rendering                          |
-| `--png`             |          | off             | Save PNG instead of PDF                                                    |
-| `--pt_size`         |          | `0.25`          | UMAP point size                                                            |
-| `--max_cells`       |          | `250000`        | Downsample UMAP to this many cells                                         |
-| `--out`             |          | `umap_plot`     | Output filename (the extension is set automatically)                       |
+- **PDF** (default): **`cairo_pdf`** with vector output and rasterized scatter points.
+- **PNG** (with `--png`): 300 DPI, white background, via **`ragg::agg_png`**.
 
 ---
 
@@ -281,80 +246,54 @@ Required only when you pass `--show_ref`. Tab separated with at least:
 
 ### Minimal – LocusZoom only, no UMAP / master / modules
 
-Only the LocusZoom CSV is mandatory. The script auto-derives the module name from the filename and uses the top-P SNP as the anchor.
+**Minimal single-population (PDF, rasterized, no reference):**
 
 ```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --lz_files     UMAP_lz_values.csv \
-  --ld_files     UMAP_lz_values.raw \
-  --gtf          gencode.v49.annotation.gtf \
-  --annotations  homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
-  --zoom_window  5000 \
-  --name         GH \
-  --out          umap_minimal.pdf --raster
+Rscript plot_umap_simplified_multimodules.R \
+  --umap_1 path/to/umap.tsv \
+  --master_1 path/to/master_annotations.tsv \
+  --modules_1 M_13916,M_20000 \
+  --name_1 "European"
 ```
 
-### Beta UMAP only (no LocusZoom)
+**Dual-population side-by-side:**
 
 ```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap    UMAP_GH_QCed_f3_ct2.tsv \
-  --master  freeze3_gh_cs_full_annotations.20260306.tsv \
-  --modules M_18448 \
-  --name    GH \
-  --anno_join_col cell \
-  --out     umap_GH_min.pdf \
-  --raster
+Rscript plot_umap_simplified_multimodules.R \
+  --umap_1 pop1_umap.tsv \
+  --master_1 pop1_master.tsv \
+  --modules_1 M_13916,M_20000 \
+  --name_1 "UKB" \
+  --umap_2 pop2_umap.tsv \
+  --master_2 pop2_master.tsv \
+  --modules_2 M_13916,M_20000 \
+  --name_2 "GH"
 ```
 
-### Multiple modules – one row each
+**With reference panel and PNG output:**
 
 ```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap    UMAP_GH_QCed_f3_ct2.tsv \
-  --master  freeze3_gh_cs_full_annotations.20260306.tsv \
-  --modules "M_18448,M_11607,M_10171" \
-  --name    GH --anno_join_col cell \
-  --z_files "icd10_j15_zscore.csv,NA,bmi_zscore.csv" \
-  --lz_files "j15_lz_ENSG00000101546.csv,NA,NA" \
-  --gtf     gencode.v49.annotation.gtf \
-  --out     umap_GH_multi.pdf --raster
+Rscript plot_umap_simplified_multimodules.R \
+  --umap_1 umap.tsv \
+  --master_1 master.tsv \
+  --modules_1 M_13916 \
+  --colors palette.tsv \
+  --show_ref --png \
+  --out my_figure
 ```
 
-Each comma‑separated list must be the same length as `--modules`; use `NA`
-for any module that has no Z‑score or LocusZoom file.
-
-### Restrict to one (cell, gene) pair of a multi‑gene module
+**Skip a module in one population (use `NA`):**
 
 ```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap    UMAP_GH_QCed_f3_ct2.tsv \
-  --master  freeze3_gh_cs_full_annotations.20260306.tsv \
-  --modules M_18448 \
-  --name    GH --anno_join_col cell \
-  --cell    T_CD4_CM \
-  --gene    "RBFA,ENSG00000101544" \
-  --lz_files j15_locuszoom_ENSG00000101546.csv \
-  --gtf     gencode.v49.annotation.gtf \
-  --out     umap_GH_one_pair.pdf --raster
-```
-
-### Full pipeline (the canonical example)
-
-```bash
-Rscript plot_umap_simplified_multimodules_one_side.R \
-  --umap          UMAP_GH_QCed_f3_ct2.tsv \
-  --master        freeze3_gh_cs_full_annotations.20260306.tsv \
-  --modules       M_18448 \
-  --name          GH \
-  --anno_join_col cell \
-  --z_files       icd10_j15_zscore_merge_notnull.csv \
-  --lz_files      j15_locuszoom_ENSG00000101546.csv \
-  --gtf           gencode.v49.annotation.gtf \
-  --annotations   homo_sapiens.GRCh38.Regulatory_Build.regulatory_features.20190329.promoter.gff \
-  --zoom_window   5000 \
-  --out           umap_GH_J15.pdf \
-  --raster
+Rscript plot_umap_simplified_multimodules.R \
+  --umap_1 pop1_umap.tsv \
+  --master_1 pop1_master.tsv \
+  --modules_1 M_13916,NA,M_30000 \
+  --name_1 "Pop1" \
+  --umap_2 pop2_umap.tsv \
+  --master_2 pop2_master.tsv \
+  --modules_2 NA,M_20000,M_30000 \
+  --name_2 "Pop2"
 ```
 
 ---
@@ -367,7 +306,7 @@ Rscript plot_umap_simplified_multimodules_one_side.R \
   1. `-log10(P)` scatter with the highlighted lead SNP,
   2. zoom annotation panel (only if `--annotations` is supplied). Discrete tracks draw solid blocks; continuous tracks (BED with a numeric 5th column) draw score‑scaled bars.
 
-Sizing scales automatically: page width = `n_cols × 6"`, page height = `n_rows × 4.5"` (minimum `5"`), where `n_rows` = number of surviving `(module, cell, gene)` triples.
+The beta panel uses a diverging **blue → white → yellow/orange/red** gradient symmetric around zero (`± max(|beta|)` in the plotted data). Missing betas after the join are coerced to **0** for plotting; `NA` in the scale is shown as **grey**.
 
 ---
 
@@ -439,4 +378,8 @@ You can use on the hpc the tdbsumstat conda environment or you need the followin
 pip install scanpy pandas tiledb scipy numpy
 ```
 
-`extract_z_lz.py` also shells out to `plink2` (must be on `$PATH`) to produce the `.raw` genotype matrix from the SNP list.
+- **"Missing required arguments"** — Must provide all of `--umap_1`, `--master_1`, and `--modules_1`.
+- **"--colors required with --show_ref"** — Provide `--colors` when using `--show_ref`.
+- **"Pop 1 and Pop 2 module lists must have the same number of items"** — Ensure the comma-separated lists in `--modules_1` and `--modules_2` have equal length.
+- **Module not found warnings** — Check that the module ID exists in the `module` column of the master annotation file.
+- **Join failures / empty plots** — Ensure `--join_col` (and `--anno_join_col` if used) values match across the UMAP and master annotation files (same spelling and level set).
