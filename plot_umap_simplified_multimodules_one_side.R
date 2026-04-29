@@ -61,7 +61,10 @@ option_list <- list(
   
   make_option("--out", type = "character", default = "umap_plot", help = "Output filename prefix"),
   make_option("--pt_size", type = "numeric", default = 0.25, help = "Point size"),
-  make_option("--max_cells", type = "numeric", default = 250000, help = "Max cells to plot"),
+  make_option("--max_cells", type = "numeric", default = 250000,
+              help = "When --umap_sample_n is not set: subsample the UMAP to this many rows only if the input has more rows than this value [default: %default]"),
+  make_option("--umap_sample_n", type = "integer", default = -1L,
+              help = "If >= 1, randomly subsample UMAP rows to at most this many cells (set.seed 42) for smaller PDFs, even when total rows is below --max_cells. Use -1 to rely on --max_cells only [default: %default]"),
   
   # Flipped Toggle Flags
   make_option("--png", action="store_true", default=FALSE, help="Save as PNG instead of PDF (PDF is default)"),
@@ -167,7 +170,20 @@ if (has_umap) {
                                                        hex_color = color_ct2),
                                  by = opt$join_col)
             else umap
-  if (nrow(merged) > opt$max_cells) { set.seed(42); merged <- merged %>% slice_sample(n = opt$max_cells) }
+  n_umap_in <- nrow(merged)
+  if (n_umap_in > 0) {
+    cap <- NULL
+    if (!is.na(opt$umap_sample_n) && opt$umap_sample_n >= 1L) {
+      cap <- min(as.integer(opt$umap_sample_n), n_umap_in)
+    } else if (n_umap_in > opt$max_cells) {
+      cap <- as.integer(opt$max_cells)
+    }
+    if (!is.null(cap) && n_umap_in > cap) {
+      set.seed(42L)
+      merged <- merged %>% slice_sample(n = cap)
+      cat(sprintf("UMAP subsampled to %d cells (from %d).\n", cap, n_umap_in))
+    }
+  }
 }
 if (has_master) meta <- fread(opt$master)
 
