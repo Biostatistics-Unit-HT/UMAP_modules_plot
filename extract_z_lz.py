@@ -40,15 +40,27 @@ qtl_adata_cs = sc.read_h5ad(args.qtl_cs_adata)
 
 tdb = tiledb.open(args.tiledb)
 
+
 selected_ids = qtl_adata_module.obs_names[qtl_adata_module.obs.index == args.qtl_module]
 qtl_adata_obs = qtl_adata_module[qtl_adata_module.obs_names.isin(selected_ids), :].copy()
 list_pheno = qtl_adata_obs.obs['phenotype_id'][0].split(", ")
 list_cs = qtl_adata_obs.obs['list_of_cs'][0].split(", ")
+chrom = qtl_adata_obs.obs['chr'].iloc[0]
+
+if (args.dis_adata & args.dis_cs):
+    disease_adata = sc.read_h5ad(args.dis_adata)
+    mask_obs = disease_adata.obs["cs_name"]==args.dis_cs
+    disease_adata_obs = disease_adata[mask_obs,:].copy()
+    start = disease_adata_obs.obs['start'].iloc[0]
+    end = disease_adata_obs.obs['end'].iloc[0]
+    mask_var = (disease_adata_obs.var["chr"]==chrom) & (disease_adata_obs.var["pos"] > start) & (disease_adata_obs.var["pos"] < end)
+    disease_adata_obs_var = disease_adata_obs[:, mask_var]
+    disease_adata_zscore = pd.DataFrame({"snp":disease_adata_obs_var.var['snp'],"z_disease":disease_adata_obs_var.layers['beta'].toarray()[0]/disease_adata_obs_var.layers['se'].toarray()[0]})
+
 snps_plink = pd.DataFrame()
 for pheno,cs in zip(list_pheno,list_cs):
     cell,gene = pheno.split(":")
     qtl_adata_cs_obs = qtl_adata_cs[cs,:].copy()
-    chrom = qtl_adata_cs_obs.obs['chr'].iloc[0]
     start = qtl_adata_cs_obs.obs['start'].iloc[0]
     end = qtl_adata_cs_obs.obs['end'].iloc[0]
     mask_var = (qtl_adata_cs_obs.var["chr"]==chrom) & (qtl_adata_cs_obs.var["pos"] > start) & (qtl_adata_cs_obs.var["pos"] < end)
@@ -66,6 +78,14 @@ for pheno,cs in zip(list_pheno,list_cs):
     qtl_adata_lz.to_csv(f"{args.out}.csv", index = False, mode = 'a', header=None)
     gene_extracted_to_plot.to_csv(f"{args.out}_genelist.csv", index = False, mode = 'a', header=None)
     snps_plink = pd.concat([snps_plink, gene_extracted["SNPID"]])
+    if (args.dis_adata & args.dis_cs):
+        mask_var_modules = (qtl_adata_cs_obs.var["chr"]==chrom) & (qtl_adata_cs_obs.var["pos"] > start) & (qtl_adata_cs_obs.var["pos"] < end)
+        qtl_adata_modules_obs_var = qtl_adata_cs_obs[:, mask_var_modules]
+        qtl_adata_zscore = pd.DataFrame({"snp":qtl_adata_modules_obs_var.var['snp'],"z_qtl":qtl_adata_modules_obs_var.layers['beta'].toarray()[0]/qtl_adata_modules_obs_var.layers['se'].toarray()[0]})
+        disease_qtl_zscore_merge = disease_adata_zscore.merge(qtl_adata_zscore, on = "snp")
+        icd10_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_disease"].isna()]
+        icd10_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_qtl"].isna()]
+        icd10_zscore_merge_notnull.to_csv(f"{args.out}_zscores.csv", index = False, mode = "a")
 
 snps_plink = snps_plink.drop_duplicates()
 snps_plink["SNPID"] = snps_plink["SNPID"].str.replace("chr","")
@@ -85,21 +105,4 @@ cmd = [
 # 4. Run the command
 # check=True ensures Python throws an error if the PLINK command fails
 subprocess.run(cmd, check=True)
-
-if (args.dis_adata & args.dis_cs):
-    disease_adata = sc.read_h5ad(args.dis_adata)
-    mask_obs = disease_adata.obs["cs_name"]==args.dis_cs
-    disease_adata_obs = disease_adata[mask_obs,:].copy()
-    start = disease_adata_obs.obs['start'].iloc[0]
-    end = disease_adata_obs.obs['end'].iloc[0]
-    mask_var = (disease_adata_obs.var["chr"]==chrom) & (disease_adata_obs.var["pos"] > start) & (disease_adata_obs.var["pos"] < end)
-    disease_adata_obs_var = disease_adata_obs[:, mask_var]
-    disease_adata_zscore = pd.DataFrame({"snp":disease_adata_obs_var.var['snp'],"z_disease":disease_adata_obs_var.layers['beta'].toarray()[0]/disease_adata_obs_var.layers['se'].toarray()[0]})
-    mask_var_modules = (qtl_adata_cs_obs.var["chr"]==chrom) & (qtl_adata_cs_obs.var["pos"] > start) & (qtl_adata_cs_obs.var["pos"] < end)
-    qtl_adata_modules_obs_var = qtl_adata_cs_obs[:, mask_var_modules]
-    qtl_adata_zscore = pd.DataFrame({"snp":qtl_adata_modules_obs_var.var['snp'],"z_qtl":qtl_adata_modules_obs_var.layers['beta'].toarray()[0]/qtl_adata_modules_obs_var.layers['se'].toarray()[0]})
-    disease_qtl_zscore_merge = disease_adata_zscore.merge(qtl_adata_zscore, on = "snp")
-    icd10_j15_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_disease"].isna()]
-    icd10_j15_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_qtl"].isna()]
-    icd10_j15_zscore_merge_notnull.to_csv(f"{args.out}_zscores.csv", index = False)
 
