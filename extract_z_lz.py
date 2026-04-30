@@ -47,7 +47,7 @@ list_pheno = qtl_adata_obs.obs['phenotype_id'][0].split(", ")
 list_cs = qtl_adata_obs.obs['list_of_cs'][0].split(", ")
 chrom = qtl_adata_obs.obs['chr'].iloc[0]
 
-if args.dis_adata & args.dis_cs:
+if args.dis_adata and args.dis_cs:
     disease_adata = sc.read_h5ad(args.dis_adata)
     mask_obs = disease_adata.obs["cs_name"]==args.dis_cs
     disease_adata_obs = disease_adata[mask_obs,:].copy()
@@ -78,7 +78,7 @@ for pheno,cs in zip(list_pheno,list_cs):
     qtl_adata_lz.to_csv(f"{args.out}.csv", index = False, mode = 'a', header=None)
     gene_extracted_to_plot.to_csv(f"{args.out}_genelist.csv", index = False, mode = 'a', header=None)
     snps_plink = pd.concat([snps_plink, gene_extracted["SNPID"]])
-    if args.dis_adata & args.dis_cs:
+    if args.dis_adata and args.dis_cs:
         mask_var_modules = (qtl_adata_cs_obs.var["chr"]==chrom) & (qtl_adata_cs_obs.var["pos"] > start) & (qtl_adata_cs_obs.var["pos"] < end)
         qtl_adata_modules_obs_var = qtl_adata_cs_obs[:, mask_var_modules]
         qtl_adata_zscore = pd.DataFrame({"cs_qtl":qtl_adata_modules_obs_var.obs['cs_name'],"snp":qtl_adata_modules_obs_var.var['snp'],"z_qtl":qtl_adata_modules_obs_var.layers['beta'].toarray()[0]/qtl_adata_modules_obs_var.layers['se'].toarray()[0]})
