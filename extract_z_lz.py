@@ -19,7 +19,7 @@ parser.add_argument("--qtl_cs_adata",  help="Anndata containing the credible set
 parser.add_argument("--tiledb", help = "TileDB were raw QTLs are stored")
 parser.add_argument("--dis_cs", default=False, help="Name of the credible set of the disease")
 parser.add_argument("--qtl_module", help="Name of the credible set (module) of the qtl")
-parser.add_argument("--safeld", help="Path of SAFE-ld")
+parser.add_argument("--safeld", default = False, help="Path of SAFE-ld")
 parser.add_argument("--out", help = "Name of the output file")
 args = parser.parse_args()
 
@@ -104,5 +104,6 @@ cmd = [
 
 # 4. Run the command
 # check=True ensures Python throws an error if the PLINK command fails
-subprocess.run(cmd, check=True)
+if args.safeld:
+    subprocess.run(cmd, check=True)
 
