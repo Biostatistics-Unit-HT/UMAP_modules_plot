@@ -93,7 +93,6 @@ for pheno,cs in zip(list_pheno,list_cs):
         icd10_zscore_merge_notnull.to_csv(f"{args.out}_zscores.csv", index = False, mode = "a")
 
 snps_plink = snps_plink.drop_duplicates()
-snps_plink = snps_plink.drop("cs_qtl")
 snps_plink["SNPID"] = snps_plink["SNPID"].str.replace("chr","")
 
 
