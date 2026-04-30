@@ -46,7 +46,7 @@ option_list <- list(
   
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
-  make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl (credible-set id; shown as caption when one unique value)."),
+  make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
   make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P"),
   make_option("--ld_files", type = "character", default = NULL, help = "Comma-separated paths to plink2 --export A .raw genotype files (use NA for missing). One per module; drives the r^2-based LD colouring of the LocusZoom points."),
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
@@ -259,6 +259,16 @@ for (i in seq_len(n_items)) {
   
   # LD matrix (r^2) for this module; all CSs share the same genotype file.
   ld_mat <- if (has_ld) load_ld_matrix(ld_files[i]) else NULL
+  
+  z_tbl_mod <- NULL
+  if (has_z) {
+    zpath <- z_files[i]
+    if (!is.na(zpath) && zpath != "NA" && file.exists(zpath)) {
+      z_tbl_mod <- fread(zpath)
+    } else if (!is.na(zpath) && zpath != "NA") {
+      cat(sprintf("Warning: Z-score file not found at %s\n", zpath))
+    }
+  }
   
   module_plots <- list()
   lead_bag     <- numeric(0)   # lead SNP positions, for the merged box
@@ -556,10 +566,10 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {
-      module_plots[[length(module_plots) + 1]] <- plot_zscore(
-        z_files[i],
-        title = paste0("Coloc Z-Scores | ", this_cell, " | ", this_sym,
-                       "\n[", mod_id, "]"))
+      z_title <- paste0("Coloc Z-Scores | ", this_cell, " | ", this_sym,
+                       "\n[", mod_id, "]")
+      module_plots[[length(module_plots) + 1]] <- build_zscore_column(
+        z_tbl_mod, z_title, this_cs = this_cs)
     }
   }
   
