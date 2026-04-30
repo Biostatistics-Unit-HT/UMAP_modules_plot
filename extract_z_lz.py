@@ -88,22 +88,22 @@ for pheno,cs in zip(list_pheno,list_cs):
         icd10_zscore_merge_notnull.to_csv(f"{args.out}_zscores.csv", index = False, mode = "a")
 
 snps_plink = snps_plink.drop_duplicates()
+snps_plink = snps_plink.drop("cs_qtl")
 snps_plink["SNPID"] = snps_plink["SNPID"].str.replace("chr","")
 
-# 2. Save to a text file (one SNP per line, no headers or row numbers)
-snps_plink.to_csv("tmp_snp_plink.txt", index=False, header=None)
 
-# 3. Build the PLINK2 command as a list
-cmd = [
+# 4. Run the command
+# check=True ensures Python throws an error if the PLINK command fails
+if args.safeld:
+    # 2. Save to a text file (one SNP per line, no headers or row numbers)
+    snps_plink.to_csv("tmp_snp_plink.txt", index=False, header=None)
+    # 3. Build the PLINK2 command as a list
+    cmd = [
     'plink2', 
     '--pfile', f'{args.safeld}', 
     '--extract', 'tmp_snp_plink.txt', 
     '--export', 'A', 'include-alt', # Each word is a separate string
     '--out', f'{args.out}'
-]
-
-# 4. Run the command
-# check=True ensures Python throws an error if the PLINK command fails
-if args.safeld:
+    ]
     subprocess.run(cmd, check=True)
 
