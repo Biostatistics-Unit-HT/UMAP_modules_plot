@@ -1,13 +1,17 @@
 # UMAP coloured by per-cell-type beta for the focal (module, cell, gene).
 
 # plot_beta(): UMAP coloured by a per-cell-type beta_val, with a symmetric
-# blue-yellow-red diverging palette anchored at 0.
+# blue-yellow-red diverging palette anchored at 0. Rows with NA beta_val use
+# na.value (grey) so non-highlighted cell types can stay in the background.
 #
 # Example:
 #   plot_beta(plot_df, "GH | RBFA\n[M_18448]", 0.25, "celltype_2",
-#             show_legend=TRUE, use_raster=TRUE, show_labels=TRUE)
+#             show_legend=TRUE, use_raster=TRUE, show_labels=TRUE,
+#             label_cells_only=NULL)
+#   # -> ggplot; with label_cells_only=c("B_naive") only that type gets a label.
 plot_beta <- function(df, title, pt_size, join_col, show_legend = TRUE,
-                      use_raster = FALSE, show_labels = FALSE) {
+                      use_raster = FALSE, show_labels = FALSE,
+                      label_cells_only = NULL) {
   b_max <- max(abs(df$beta_val), na.rm = TRUE)
   if (!is.finite(b_max) || b_max <= 0) b_max <- 1e-9
   colors_beta <- c("#00008B", "#1E90FF", "#90CAF9", "#E8E8E8", "#FFEB3B", "#FF9800", "#E53935")
@@ -34,6 +38,10 @@ plot_beta <- function(df, title, pt_size, join_col, show_legend = TRUE,
                 .groups = "drop") %>%
       filter(!is.na(mod_id) & mod_id != "") %>%
       mutate(label_text = .data[[join_col]])
+    if (!is.null(label_cells_only) && length(label_cells_only) > 0) {
+      keep_lab <- as.character(centroids[[join_col]]) %in% label_cells_only
+      centroids <- centroids[keep_lab, , drop = FALSE]
+    }
     p <- p + geom_text_repel(data = centroids,
                              aes(x = UMAP_1, y = UMAP_2, label = label_text),
                              inherit.aes = FALSE, size = 4.5,

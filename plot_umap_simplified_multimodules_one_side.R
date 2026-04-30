@@ -30,6 +30,8 @@ for (f in sort(list.files(file.path(script_dir, "R"),
                           pattern = "\\.R$", full.names = TRUE))) {
   source(f, local = FALSE)
 }
+# Ensure plot_beta() is the version shipped with this script (e.g. label_cells_only).
+source(file.path(script_dir, "R", "11_plot_beta.R"), local = FALSE)
 
 # --- CLI Options ---
 option_list <- list(
@@ -56,7 +58,8 @@ option_list <- list(
   make_option("--gtf", type = "character", default = NULL, help = "Optional GENCODE GTF (e.g. gencode.v49.annotation.gtf) or a pre-built .coding_genes.tsv. When supplied, the LocusZoom gene track shows every protein-coding gene in the window."),
   make_option("--annotations", type = "character", default = NULL, help = "Optional comma-separated annotation file(s) to show in a zoom panel around the lead SNP. BED-style (chrom, start, end, feature_type [, score]) or full 9-col GFF. A numeric 5th column turns the lane into a continuous profile."),
   make_option("--zoom_window", type = "numeric", default = 5000, help = "Half-width in bp for the zoom annotation panel around the lead SNP [default: %default]"),
-  make_option("--cell", type = "character", default = NULL, help = "Optional comma-separated list of cell types to keep. Default: plot every (cell, gene) pair a module has."),
+  make_option("--cell", type = "character", default = NULL, help = "Optional comma-separated list of cell types to keep for credible-set rows (module_cs_list). On the beta UMAP, only these types use the beta colour scale; other cells stay grey (--join_col must match the UMAP). Default: all (cell, gene) pairs and all cell types coloured by beta."),
+  make_option("--cells", type = "character", default = NULL, help = "Alias for --cell (same comma-separated list). If both are set, --cell wins."),
   make_option("--gene", type = "character", default = NULL, help = "Optional comma-separated list of gene identifiers to keep (matched against eGene_symbol or bare eGene ENSG)."),
   
   make_option("--out", type = "character", default = "umap_plot", help = "Output filename prefix"),
@@ -105,7 +108,15 @@ if (show_ref && is.null(opt$colors))
 if (show_ref && !has_umap)
   stop("--show_ref requires --umap (there is no UMAP to draw the reference on).")
 
-cell_filter <- if (!is.null(opt[["cell"]])) trimws(unlist(strsplit(opt[["cell"]], ","))) else NULL
+cell_filter <- {
+  raw <- NULL
+  if (!is.null(opt[["cell"]]) && nzchar(as.character(opt[["cell"]]))) {
+    raw <- as.character(opt[["cell"]])
+  } else if (!is.null(opt[["cells"]]) && nzchar(as.character(opt[["cells"]]))) {
+    raw <- as.character(opt[["cells"]])
+  }
+  if (!is.null(raw)) trimws(unlist(strsplit(raw, ","))) else NULL
+}
 gene_filter <- if (!is.null(opt[["gene"]])) trimws(unlist(strsplit(opt[["gene"]], ","))) else NULL
 
 # Establish the module list (either explicit via --modules or synthesised
@@ -351,9 +362,24 @@ for (i in seq_len(n_items)) {
         cat(sprintf("Warning: No beta rows for module %s, gene %s - skipping Beta UMAP for this CS.\n",
                     mod_id, this_gene))
       } else {
-        plot_df <- merged %>% left_join(beta_tbl, by = opt$join_col) %>%
-          mutate(beta_val = coalesce(as.numeric(beta_val), 0)) %>%
-          arrange(abs(beta_val))
+        jc_beta <- opt$join_col
+        plot_df <- merged %>% left_join(beta_tbl, by = jc_beta) %>%
+          mutate(beta_num = as.numeric(beta_val))
+        if (!is.null(cell_filter) && length(cell_filter) > 0) {
+          if (!jc_beta %in% names(plot_df)) {
+            stop("Beta UMAP: column ", jc_beta, " (--join_col) not found after joining master betas.")
+          }
+          focal <- as.character(plot_df[[jc_beta]]) %in% cell_filter
+          plot_df <- plot_df %>%
+            mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
+            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            select(-beta_num)
+        } else {
+          plot_df <- plot_df %>%
+            mutate(beta_val = coalesce(beta_num, 0)) %>%
+            arrange(abs(beta_val)) %>%
+            select(-beta_num)
+        }
       }
     }
     
@@ -512,9 +538,18 @@ for (i in seq_len(n_items)) {
       }
     }
     if (has_beta_panel && !is.null(plot_df)) {
-      module_plots[[length(module_plots) + 1]] <- plot_beta(
-        plot_df, beta_title, opt$pt_size, opt$join_col,
-        show_legend = TRUE, use_raster = use_raster, show_labels = show_labels)
+      pb_args <- list(
+        plot_df,
+        beta_title,
+        opt$pt_size,
+        opt$join_col,
+        show_legend = TRUE,
+        use_raster = use_raster,
+        show_labels = show_labels
+      )
+      if ("label_cells_only" %in% names(formals(plot_beta)))
+        pb_args$label_cells_only <- cell_filter
+      module_plots[[length(module_plots) + 1]] <- do.call(plot_beta, pb_args)
     } else if (has_beta_panel) {
       # Column must stay aligned -- insert a blank placeholder when this
       # CS had no master-derived beta rows.
