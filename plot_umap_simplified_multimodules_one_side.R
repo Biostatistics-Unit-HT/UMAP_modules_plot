@@ -46,7 +46,7 @@ option_list <- list(
   
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
-  make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing)"),
+  make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl (credible-set id; shown as caption when one unique value)."),
   make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P"),
   make_option("--ld_files", type = "character", default = NULL, help = "Comma-separated paths to plink2 --export A .raw genotype files (use NA for missing). One per module; drives the r^2-based LD colouring of the LocusZoom points."),
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
