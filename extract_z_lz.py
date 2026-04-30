@@ -81,7 +81,7 @@ for pheno,cs in zip(list_pheno,list_cs):
     if (args.dis_adata & args.dis_cs):
         mask_var_modules = (qtl_adata_cs_obs.var["chr"]==chrom) & (qtl_adata_cs_obs.var["pos"] > start) & (qtl_adata_cs_obs.var["pos"] < end)
         qtl_adata_modules_obs_var = qtl_adata_cs_obs[:, mask_var_modules]
-        qtl_adata_zscore = pd.DataFrame({"snp":qtl_adata_modules_obs_var.var['snp'],"z_qtl":qtl_adata_modules_obs_var.layers['beta'].toarray()[0]/qtl_adata_modules_obs_var.layers['se'].toarray()[0]})
+        qtl_adata_zscore = pd.DataFrame({"cs_qtl":qtl_adata_modules_obs_var.obs['cs_name'],"snp":qtl_adata_modules_obs_var.var['snp'],"z_qtl":qtl_adata_modules_obs_var.layers['beta'].toarray()[0]/qtl_adata_modules_obs_var.layers['se'].toarray()[0]})
         disease_qtl_zscore_merge = disease_adata_zscore.merge(qtl_adata_zscore, on = "snp")
         icd10_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_disease"].isna()]
         icd10_zscore_merge_notnull= disease_qtl_zscore_merge[~disease_qtl_zscore_merge["z_qtl"].isna()]
