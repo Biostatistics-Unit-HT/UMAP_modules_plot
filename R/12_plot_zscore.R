@@ -44,12 +44,12 @@ shorten_cs_label <- function(s, max_len = 56L) {
   if (nchar(tail) > max_len) paste0(substr(tail, 1, max_len - 3L), "...") else tail
 }
 
-# plot_zscore_df(): scatter QTL Z vs disease Z from an in-memory table.
-# Optional panel_cs_label becomes the subtitle (one credible set per panel).
+# plot_zscore_df(): scatter QTL Z vs disease Z from an in-memory table (uniform
+# blue points, no Z-based colour scale). Optional panel_cs_label becomes subtitle.
 #
 # Example:
 #   plot_zscore_df(data.frame(z_qtl = 1:3, z_disease = 3:1), "Z | cell | g\n[M]")
-#   # -> ggplot object.
+#   # -> ggplot with diagonals and dashed zero lines.
 plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL) {
   if (is.null(df) || nrow(df) == 0L) return(plot_spacer())
   nms <- names(df)

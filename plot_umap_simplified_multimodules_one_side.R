@@ -14,17 +14,21 @@ suppressPackageStartupMessages({
 })
 
 # Load modularised helpers from R/ (same directory as this script).
-# Works under Rscript (uses --file=...), source() (uses sys.frame(1)$ofile),
-# or interactive runs (falls back to getwd()).
-script_dir <- tryCatch(
-  dirname(normalizePath(sys.frame(1)$ofile, mustWork = FALSE)),
-  error = function(e) getwd()
-)
+# Rscript sets --file=<path>; sys.frame(1)$ofile is not reliable at top level,
+# so always derive script_dir from --file= first (works when cwd is a parent folder).
+.cli_args <- commandArgs(trailingOnly = FALSE)
+.file_arg <- sub("^--file=", "", .cli_args[grepl("^--file=", .cli_args)])
+script_dir <- if (length(.file_arg) >= 1L && nzchar(.file_arg[[1L]])) {
+  dirname(normalizePath(.file_arg[[1L]], mustWork = FALSE))
+} else {
+  tryCatch(
+    dirname(normalizePath(sys.frame(1)$ofile, mustWork = FALSE)),
+    error = function(e) normalizePath(getwd(), mustWork = FALSE)
+  )
+}
 if (!dir.exists(file.path(script_dir, "R"))) {
-  .cli_args <- commandArgs(trailingOnly = FALSE)
-  .file_arg <- sub("--file=", "", .cli_args[grepl("^--file=", .cli_args)])
-  if (length(.file_arg) == 1 && nzchar(.file_arg))
-    script_dir <- dirname(normalizePath(.file_arg))
+  stop("Cannot find R/ next to this script. script_dir=", script_dir,
+       "\nRun from the project folder or use: Rscript path/to/plot_umap_simplified_multimodules_one_side.R")
 }
 for (f in sort(list.files(file.path(script_dir, "R"),
                           pattern = "\\.R$", full.names = TRUE))) {
@@ -32,6 +36,10 @@ for (f in sort(list.files(file.path(script_dir, "R"),
 }
 # Ensure plot_beta() is the version shipped with this script (e.g. label_cells_only).
 source(file.path(script_dir, "R", "11_plot_beta.R"), local = FALSE)
+# Same for Z-score helpers (build_zscore_column, plot_zscore_df).
+source(file.path(script_dir, "R", "12_plot_zscore.R"), local = FALSE)
+if (!exists("build_zscore_column", mode = "function"))
+  stop("R/12_plot_zscore.R must define build_zscore_column(); refresh that file from the repo.")
 
 # --- CLI Options ---
 option_list <- list(
@@ -47,7 +55,7 @@ option_list <- list(
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
   make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
-  make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P"),
+  make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables (z_qtl, z_disease) belong in --z_files; repeating --lz_files leaves only the last path."),
   make_option("--ld_files", type = "character", default = NULL, help = "Comma-separated paths to plink2 --export A .raw genotype files (use NA for missing). One per module; drives the r^2-based LD colouring of the LocusZoom points."),
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
@@ -63,7 +71,7 @@ option_list <- list(
   make_option("--gene", type = "character", default = NULL, help = "Optional comma-separated list of gene identifiers to keep (matched against eGene_symbol or bare eGene ENSG)."),
   
   make_option("--out", type = "character", default = "umap_plot", help = "Output filename prefix"),
-  make_option("--pt_size", type = "numeric", default = 0.25, help = "Point size"),
+  make_option("--pt_size", type = "numeric", default = 0.25, help = "UMAP point scale (default %default). Raster PDFs use geom_scattermore: larger values map to visibly bigger pixels; try 0.4–1.2. With --no_raster, maps to ggplot point size (~1.2 + 5*pt_size)."),
   make_option("--max_cells", type = "numeric", default = 250000,
               help = "When --umap_sample_n is not set: subsample the UMAP to this many rows only if the input has more rows than this value [default: %default]"),
   make_option("--umap_sample_n", type = "integer", default = -1L,

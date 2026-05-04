@@ -17,6 +17,17 @@ load_lz_file <- function(path) {
     return(NULL)
   }
   first_line <- readLines(path, n = 1, warn = FALSE)
+  if (length(first_line) > 0 && nzchar(first_line) &&
+      grepl("z_qtl", first_line, ignore.case = TRUE) &&
+      (grepl("z_disease", first_line, ignore.case = TRUE) ||
+       grepl("z_icd10", first_line, ignore.case = TRUE))) {
+    cat(sprintf(
+      "Warning: %s looks like a coloc Z-score table (e.g. snp, z_disease, z_qtl). ",
+      path))
+    cat("Pass it with --z_files, not --lz_files. ")
+    cat("If you passed --lz_files twice, only the last path is used; keep UMAP_lz_values.csv on --lz_files and put the z-score path on --z_files.\n")
+    return(NULL)
+  }
   has_header <- length(first_line) > 0 &&
                 grepl("\\bCHR\\b", first_line) &&
                 grepl("\\bPOS\\b", first_line) &&

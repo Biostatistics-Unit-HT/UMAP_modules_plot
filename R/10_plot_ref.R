@@ -1,7 +1,8 @@
 # Reference UMAP coloured by cell-type palette (enabled via --show_ref).
 
 # plot_ref(): reference UMAP coloured by celltype palette; labels celltype
-# centroids with ggrepel. Used when --show_ref is enabled.
+# centroids with ggrepel. Used when --show_ref is enabled. Raster point size
+# uses scattermore_pointsize() from 11_plot_beta.R (sourced later in the same run).
 #
 # Example:
 #   plot_ref(merged, "GH Reference", "celltype_2", 0.25, TRUE)
@@ -12,7 +13,14 @@ plot_ref <- function(df, title_text, join_col, pt_size, use_raster) {
               UMAP_2 = median(UMAP_2, na.rm = TRUE),
               .groups = "drop")
   p <- ggplot(df, aes(x = UMAP_1, y = UMAP_2))
-  if (use_raster) p <- p + geom_scattermore(aes(color = hex_color), pointsize = pt_size + 1.5, pixels = c(2048, 2048)) else p <- p + geom_point(aes(color = hex_color), size = pt_size, stroke = 0)
+  if (use_raster) {
+    p <- p + geom_scattermore(aes(color = hex_color),
+                              pointsize = scattermore_pointsize(pt_size),
+                              pixels = c(2048, 2048))
+  } else {
+    p <- p + geom_point(aes(color = hex_color),
+                        size = max(0.15, 1.2 + 5 * as.numeric(pt_size)), stroke = 0)
+  }
   p + scale_color_identity() +
     geom_text_repel(data = centroids, aes(label = .data[[join_col]]),
                     size = 3.5, fontface = "bold", bg.color = "white",

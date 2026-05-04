@@ -1,5 +1,15 @@
 # UMAP coloured by per-cell-type beta for the focal (module, cell, gene).
 
+# scattermore_pointsize(): map ggplot-style --pt_size to geom_scattermore's
+# pointsize (pixels on the internal raster); small values were nearly invisible.
+#
+# Example:
+#   scattermore_pointsize(0.25)  # -> ~10 pixels
+#   scattermore_pointsize(0.6)   # -> larger on-screen dots
+scattermore_pointsize <- function(pt_size) {
+  max(4, 6 + 22 * as.numeric(pt_size))
+}
+
 # plot_beta(): UMAP coloured by a per-cell-type beta_val, with a symmetric
 # blue-yellow-red diverging palette anchored at 0. Rows with NA beta_val use
 # na.value (grey) so non-highlighted cell types can stay in the background.
@@ -17,7 +27,12 @@ plot_beta <- function(df, title, pt_size, join_col, show_legend = TRUE,
   colors_beta <- c("#00008B", "#1E90FF", "#90CAF9", "#E8E8E8", "#FFEB3B", "#FF9800", "#E53935")
   
   p <- ggplot(df, aes(x = UMAP_1, y = UMAP_2, color = beta_val))
-  if (use_raster) p <- p + geom_scattermore(pointsize = pt_size + 1.5, pixels = c(2048, 2048)) else p <- p + geom_point(size = pt_size, stroke = 0)
+  if (use_raster) {
+    p <- p + geom_scattermore(pointsize = scattermore_pointsize(pt_size),
+                              pixels = c(2048, 2048))
+  } else {
+    p <- p + geom_point(size = max(0.15, 1.2 + 5 * as.numeric(pt_size)), stroke = 0)
+  }
   
   p <- p + scale_color_gradientn(colors = colors_beta,
                                  limits = c(-b_max, b_max), na.value = "grey50",
