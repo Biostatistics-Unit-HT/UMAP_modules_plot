@@ -1,0 +1,7 @@
+# Python deps for extract_z_lz.py (scanpy anndata, TileDB, numeric stack)
+numpy>=1.26,<3
+pandas>=2.1
+scipy>=1.11
+scanpy>=1.9.3
+anndata>=0.10
+tiledb>=0.27

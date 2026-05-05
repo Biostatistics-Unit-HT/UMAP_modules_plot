@@ -26,7 +26,8 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                            include_zoom_panel = TRUE,
                            include_zoom_connector = TRUE,
                            ld_vec = NULL,
-                           force_lead_pos = NULL) {
+                           force_lead_pos = NULL,
+                           merge_all_cs = FALSE) {
   if (is.na(lz_file) || lz_file == "NA" || !file.exists(lz_file)) {
     if (!is.na(lz_file) && lz_file != "NA") cat(sprintf("Warning: LocusZoom file not found at %s\n", lz_file))
     return(plot_spacer())
@@ -46,7 +47,7 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   if (!is.null(lz_filter_gene) && "GENE" %in% names(df)) {
     df <- df[sub("\\.\\d+$", "", as.character(GENE)) == sub("\\.\\d+$", "", lz_filter_gene)]
   }
-  if (!is.null(lz_filter_cs) && "CS" %in% names(df)) {
+  if (!is.null(lz_filter_cs) && "CS" %in% names(df) && !isTRUE(merge_all_cs)) {
     df <- df[as.character(CS) == lz_filter_cs]
   }
   df <- df[!is.na(P) & is.finite(as.numeric(P))]
@@ -58,6 +59,22 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   }
   # `P` is the raw p-value; compute -log10 and floor to 0 to avoid -Inf.
   df[, logp := -log10(pmax(as.numeric(P), 1e-300))]
+  
+  if (isTRUE(merge_all_cs)) {
+    if (!"CS" %in% names(df)) {
+      cat(sprintf("Warning: merge_all_cs requires a CS column in %s; using standard single-region panel.\n", lz_file))
+    } else {
+      if (!is.null(ld_vec)) {
+        cat("Note: LD colouring is disabled when merge_all_cs=TRUE (points coloured by credible set).\n")
+        ld_vec <- NULL
+      }
+      chr_lab_m <- sub("^chr", "", as.character(df$CHR[1]), ignore.case = TRUE)
+      return(plot_locuszoom_merged(
+        df, locus_info, title, genes_df, annotations_tbl, annotation_tracks,
+        zoom_window, include_zoom_panel, include_zoom_connector,
+        chr_label = chr_lab_m))
+    }
+  }
   
   chr_label <- sub("^chr", "", as.character(df$CHR[1]), ignore.case = TRUE)
   
@@ -329,4 +346,154 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   zoom_h <- max(1.2, 0.6 * length(annotation_tracks) + 0.6)
   p_main / p_gene / p_link / p_zoom +
     plot_layout(heights = c(5, gene_weight, 0.35, zoom_h))
+}
+
+# plot_locuszoom_merged(): one LocusZoom panel with all credible sets overlaid,
+# points coloured by CS, plus a bottom strip showing each CS genomic span on
+# the same Mb axis (not a zoom window).
+#
+# Example:
+#   plot_locuszoom_merged(df, NULL, "LZ merged", NULL, NULL, NULL, 5000,
+#                         FALSE, FALSE, "18")
+#   # -> patchwork of main + optional gene + CS span strip.
+plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
+                                  annotations_tbl, annotation_tracks,
+                                  zoom_window, include_zoom_panel,
+                                  include_zoom_connector, chr_label) {
+  data.table::setDT(df)
+  data.table::setorderv(df, c("CS", "logp"), c(1, -1))
+  df[, is_lead := (seq_len(.N) == 1L), by = CS]
+  df[, cs_id := factor(as.character(CS), levels = sort(unique(as.character(CS))))]
+  ucs <- levels(df$cs_id)
+  nlev <- length(ucs)
+  pal_named <- stats::setNames(
+    grDevices::rainbow(nlev, s = 0.58, v = 0.88, start = 0.05, end = 0.92),
+    ucs
+  )
+  has_focal <- !is.null(locus_info) &&
+    !is.null(locus_info$gene_start) && !is.na(locus_info$gene_start) &&
+    !is.null(locus_info$gene_end) && !is.na(locus_info$gene_end)
+  has_many <- !is.null(genes_df) && nrow(genes_df) > 0
+  x_min_bp <- min(df$POS, na.rm = TRUE)
+  x_max_bp <- max(df$POS, na.rm = TRUE)
+  if (has_focal) {
+    x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
+    x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
+  }
+  if (has_many) {
+    x_min_bp <- min(x_min_bp, min(genes_df$start, na.rm = TRUE))
+    x_max_bp <- max(x_max_bp, max(genes_df$end, na.rm = TRUE))
+  }
+  pad <- max((x_max_bp - x_min_bp) * 0.02, 1)
+  x_lims_mb <- c((x_min_bp - pad) / 1e6, (x_max_bp + pad) / 1e6)
+  y_max <- max(df$logp, na.rm = TRUE) * 1.12
+
+  p_main <- ggplot2::ggplot(df[is_lead == FALSE],
+                            ggplot2::aes(x = POS / 1e6, y = logp, color = cs_id)) +
+    ggplot2::geom_point(size = 2.15, alpha = 0.86) +
+    ggplot2::geom_point(
+      data = df[is_lead == TRUE],
+      mapping = ggplot2::aes(x = POS / 1e6, y = logp, fill = cs_id),
+      inherit.aes = FALSE,
+      shape = 23, color = "black", size = 3.3, stroke = 0.45) +
+    ggplot2::scale_color_manual(values = pal_named, name = "Credible set", drop = FALSE) +
+    ggplot2::scale_fill_manual(values = pal_named, guide = "none") +
+    ggplot2::coord_cartesian(xlim = x_lims_mb, ylim = c(0, y_max), expand = FALSE) +
+    ggplot2::labs(title = title, x = NULL,
+                  y = expression(-log[10](italic(P)))) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(size = 10, face = "bold"),
+      axis.title.y = ggplot2::element_text(size = 10, face = "bold",
+                                           margin = ggplot2::margin(r = 2)),
+      axis.text = ggplot2::element_text(size = 9),
+      axis.text.x = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.border = ggplot2::element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+      plot.margin = ggplot2::margin(5, 5, 0, 2),
+      legend.position = "right",
+      legend.title = ggplot2::element_text(size = 8, face = "bold"),
+      legend.text = ggplot2::element_text(size = 7))
+
+  rng <- df[, .(xmin_mb = min(POS, na.rm = TRUE) / 1e6,
+                xmax_mb = max(POS, na.rm = TRUE) / 1e6), by = .(CS = as.character(CS))]
+  rng[, lab := vapply(CS, function(s) {
+    if (nchar(s) > 44) paste0(substr(s, 1, 41), "...") else s
+  }, character(1))]
+  rng[, cs_f := factor(CS, levels = ucs)]
+
+  p_strip <- ggplot2::ggplot(rng,
+                             ggplot2::aes(xmin = xmin_mb, xmax = xmax_mb,
+                                          ymin = 0, ymax = 1, fill = cs_f)) +
+    ggplot2::geom_rect(color = "gray35", linewidth = 0.25) +
+    ggplot2::geom_text(ggplot2::aes(x = (xmin_mb + xmax_mb) / 2, y = 0.5, label = lab),
+                       size = 2.35, color = "black") +
+    ggplot2::scale_fill_manual(values = pal_named, drop = FALSE, guide = "none") +
+    ggplot2::coord_cartesian(xlim = x_lims_mb, ylim = c(0, 1), expand = FALSE) +
+    ggplot2::labs(
+      x = paste0("Chromosome ", chr_label, " position (Mb)"),
+      y = NULL,
+      subtitle = "Credible sets (genomic span; colours match points above)") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      axis.text.y = ggplot2::element_blank(),
+      axis.title.x = ggplot2::element_text(size = 9, face = "bold"),
+      axis.text.x = ggplot2::element_text(size = 8),
+      panel.grid = ggplot2::element_blank(),
+      panel.border = ggplot2::element_rect(color = "gray70", fill = NA, linewidth = 0.4),
+      plot.subtitle = ggplot2::element_text(size = 7.5, face = "italic", hjust = 0),
+      plot.margin = ggplot2::margin(0, 5, 4, 5))
+
+  if (!has_focal && !has_many) {
+    return(p_main / p_strip + patchwork::plot_layout(heights = c(5.2, 1.05)))
+  }
+
+  focal_sym <- if (!is.null(locus_info) && !is.null(locus_info$gene_symbol) &&
+                    !is.na(locus_info$gene_symbol)) as.character(locus_info$gene_symbol) else NA_character_
+  if (has_many) {
+    track_df <- data.frame(
+      start = as.numeric(genes_df$start), end = as.numeric(genes_df$end),
+      strand = as.character(genes_df$strand), gene_name = as.character(genes_df$gene_name),
+      stringsAsFactors = FALSE)
+  } else {
+    track_df <- data.frame(
+      start = as.numeric(locus_info$gene_start), end = as.numeric(locus_info$gene_end),
+      strand = if (!is.null(locus_info$gene_strand)) as.character(locus_info$gene_strand) else "+",
+      gene_name = if (!is.na(focal_sym)) focal_sym else "gene",
+      stringsAsFactors = FALSE)
+  }
+  track_df$is_focal <- !is.na(focal_sym) & track_df$gene_name == focal_sym
+  track_df <- assign_gene_lanes(track_df)
+  n_lanes <- max(track_df$lane, 1L)
+  track_df$seg_x <- ifelse(track_df$strand == "-", track_df$end, track_df$start) / 1e6
+  track_df$seg_xend <- ifelse(track_df$strand == "-", track_df$start, track_df$end) / 1e6
+  track_df$mid_mb <- (track_df$start + track_df$end) / 2 / 1e6
+  track_df$col <- ifelse(track_df$is_focal, "#C62828", "#1A237E")
+
+  p_gene <- ggplot2::ggplot(track_df) +
+    ggplot2::geom_segment(ggplot2::aes(x = seg_x, xend = seg_xend, y = lane, yend = lane,
+                                        color = I(col)),
+                          linewidth = 1.1,
+                          arrow = grid::arrow(ends = "last", type = "closed",
+                                              length = grid::unit(0.07, "inches"))) +
+    ggrepel::geom_text_repel(ggplot2::aes(x = mid_mb, y = lane + 0.35, label = gene_name,
+                                           color = I(col),
+                                           fontface = ifelse(is_focal, "bold.italic", "italic")),
+                             size = 2.8, direction = "y", nudge_y = 0.25,
+                             box.padding = 0.2, point.padding = 0.1,
+                             segment.size = 0.45, segment.alpha = 0.75,
+                             min.segment.length = 0, max.overlaps = Inf, seed = 42) +
+    ggplot2::scale_y_continuous(limits = c(0.3, n_lanes + 1.2), breaks = NULL) +
+    ggplot2::coord_cartesian(xlim = x_lims_mb, clip = "off") +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_blank(),
+      axis.text.x = ggplot2::element_blank(), axis.title.x = ggplot2::element_blank(),
+      panel.border = ggplot2::element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+      plot.margin = ggplot2::margin(0, 5, 0, 5))
+
+  gene_weight <- max(1, min(n_lanes, 5))
+  p_main / p_gene / p_strip +
+    patchwork::plot_layout(heights = c(5.2, gene_weight, 1.05))
 }

@@ -48,6 +48,12 @@ option_list <- list(
   # All optional. At minimum you need EITHER --lz_files alone (in which case
   # the labelled / anchor SNP becomes the top-P SNP per file), OR the
   # UMAP + master + modules triple (classic per-module plotting).
+  # Register --umap_sample_n before --umap so getopt does not treat the
+  # integer default -1 as the path for --umap (shared prefix).
+  make_option("--max_cells", type = "numeric", default = 250000,
+              help = "When --umap_sample_n is not set: subsample the UMAP to this many rows only if the input has more rows than this value [default: %default]"),
+  make_option("--umap_sample_n", type = "integer", default = -1L,
+              help = "If >= 1, randomly subsample UMAP rows to at most this many cells (set.seed 42) for smaller PDFs, even when total rows is below --max_cells. Use -1 to rely on --max_cells only [default: %default]"),
   make_option("--umap", type = "character", default = NULL, help = "Path to UMAP TSV (optional). Omit to skip the Beta UMAP panel. Pair with --master to enable it."),
   make_option("--master", type = "character", default = NULL, help = "Path to Master Annotations TSV (optional). Used for per-(cell, gene) betas, gene-track symbol lookups and the module-level most-likely SNP."),
   make_option("--modules", type = "character", default = NULL, help = "Comma-separated Module IDs (optional). When omitted the script treats each --lz_files entry as one implicit module and uses the top -log10(P) SNP as the anchor."),
@@ -56,6 +62,8 @@ option_list <- list(
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
   make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
   make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables (z_qtl, z_disease) belong in --z_files; repeating --lz_files leaves only the last path."),
+  make_option("--lz_layout", type = "character", default = "stacked",
+              help = "LocusZoom layout: 'stacked' (one row per credible set) or 'merged' (single panel, all CS overlaid; LZ-only, no beta UMAP or Z). Merged adds a bottom strip (genomic span per CS, same Mb axis)."),
   make_option("--ld_files", type = "character", default = NULL, help = "Comma-separated paths to plink2 --export A .raw genotype files (use NA for missing). One per module; drives the r^2-based LD colouring of the LocusZoom points."),
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
@@ -72,10 +80,6 @@ option_list <- list(
   
   make_option("--out", type = "character", default = "umap_plot", help = "Output filename prefix"),
   make_option("--pt_size", type = "numeric", default = 0.25, help = "UMAP point scale (default %default). Raster PDFs use geom_scattermore: larger values map to visibly bigger pixels; try 0.4–1.2. With --no_raster, maps to ggplot point size (~1.2 + 5*pt_size)."),
-  make_option("--max_cells", type = "numeric", default = 250000,
-              help = "When --umap_sample_n is not set: subsample the UMAP to this many rows only if the input has more rows than this value [default: %default]"),
-  make_option("--umap_sample_n", type = "integer", default = -1L,
-              help = "If >= 1, randomly subsample UMAP rows to at most this many cells (set.seed 42) for smaller PDFs, even when total rows is below --max_cells. Use -1 to rely on --max_cells only [default: %default]"),
   
   # Flipped Toggle Flags
   make_option("--png", action="store_true", default=FALSE, help="Save as PNG instead of PDF (PDF is default)"),
@@ -85,6 +89,24 @@ option_list <- list(
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
+# optparse may leave unused character flags as NA (length-1) rather than NULL;
+# treat those as "not provided" so LZ-only runs never hit fread(opt$umap).
+opt$umap    <- if (is.null(opt$umap) || length(opt$umap) == 0L ||
+                  (length(opt$umap) == 1L && is.na(opt$umap[[1L]]))) NULL else opt$umap
+opt$master  <- if (is.null(opt$master) || length(opt$master) == 0L ||
+                  (length(opt$master) == 1L && is.na(opt$master[[1L]]))) NULL else opt$master
+opt$modules <- if (is.null(opt$modules) || length(opt$modules) == 0L ||
+                  (length(opt$modules) == 1L && is.na(opt$modules[[1L]]))) NULL else opt$modules
+opt$lz_files <- if (is.null(opt$lz_files) || length(opt$lz_files) == 0L ||
+                   (length(opt$lz_files) == 1L && is.na(opt$lz_files[[1L]]))) NULL else opt$lz_files
+opt$z_files <- if (is.null(opt$z_files) || length(opt$z_files) == 0L ||
+                  (length(opt$z_files) == 1L && is.na(opt$z_files[[1L]]))) NULL else opt$z_files
+opt$ld_files <- if (is.null(opt$ld_files) || length(opt$ld_files) == 0L ||
+                   (length(opt$ld_files) == 1L && is.na(opt$ld_files[[1L]]))) NULL else opt$ld_files
+# getopt can assign the integer default of --umap_sample_n into --umap when
+# both flags share a prefix; drop any non-character so fread() is never called
+# with -1.
+if (!is.null(opt$umap) && !is.character(opt$umap)) opt$umap <- NULL
 anno_col <- if (!is.null(opt$anno_join_col)) opt$anno_join_col else opt$join_col
 
 save_pdf   <- !opt$png
@@ -92,13 +114,21 @@ use_raster <- !opt$no_raster
 show_ref   <- opt$show_ref
 show_labels <- !opt$no_labels
 
+# optparse/getopt can mis-bind values when one long flag is a prefix of another
+# (e.g. --umap vs --umap_sample_n). Treat paths only as "set" when they are
+# non-empty character strings (not integers like the default -1).
+has_nonempty_char <- function(x) {
+  !is.null(x) && is.character(x) && length(x) >= 1L &&
+    !is.na(x[[1L]]) && nzchar(x[[1L]])
+}
+
 # --- Validation & Parsing ---
-has_umap    <- !is.null(opt$umap)
-has_master  <- !is.null(opt$master)
-has_modules <- !is.null(opt$modules)
-has_z       <- !is.null(opt$z_files)
-has_lz      <- !is.null(opt$lz_files)
-has_ld      <- !is.null(opt$ld_files)
+has_umap    <- has_nonempty_char(opt$umap)
+has_master  <- has_nonempty_char(opt$master)
+has_modules <- has_nonempty_char(opt$modules)
+has_z       <- has_nonempty_char(opt$z_files)
+has_lz      <- has_nonempty_char(opt$lz_files)
+has_ld      <- has_nonempty_char(opt$ld_files)
 
 # Beta UMAP needs both the UMAP coords and the master annotation.
 has_beta_panel <- has_umap && has_master
@@ -107,9 +137,18 @@ if (has_umap && !has_master)
 if (has_master && !has_umap)
   cat("Note: --master provided without --umap; the Beta UMAP panel is skipped (no embedding to plot on).\n")
 
+lz_layout_val <- tolower(trimws(opt$lz_layout))
+if (!lz_layout_val %in% c("stacked", "merged"))
+  stop("--lz_layout must be 'stacked' or 'merged'.")
+if (lz_layout_val == "merged" && (has_beta_panel || has_z)) {
+  cat("Warning: --lz_layout merged applies only to LocusZoom-only runs (no beta UMAP, no --z_files); using stacked.\n")
+  lz_layout_val <- "stacked"
+}
+use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_beta_panel && !has_z
+
 # Need at least something to plot.
 if (!has_lz && !has_beta_panel)
-  stop("Nothing to plot: please provide either --lz_files, or all of --umap + --master + --modules.")
+  stop("Nothing to plot: provide --lz_files and/or --umap + --master (omit --modules to use every module in --master when there is no --lz_files).")
 
 if (show_ref && is.null(opt$colors))
   stop("You must provide the --colors file if you enable --show_ref.")
@@ -127,9 +166,12 @@ cell_filter <- {
 }
 gene_filter <- if (!is.null(opt[["gene"]])) trimws(unlist(strsplit(opt[["gene"]], ","))) else NULL
 
+meta <- NULL
+if (has_master) meta <- fread(opt$master)
+
 # Establish the module list (either explicit via --modules or synthesised
-# from --lz_files, one implicit module per file). When only --modules is
-# given and no --lz_files, we fall back to the master-annotation flow.
+# from --lz_files, one implicit module per file). With --umap + --master and
+# no --lz_files, all modules in the master table are used when --modules is omitted.
 if (has_modules) {
   mods <- trimws(unlist(strsplit(opt$modules, ",")))
 } else if (has_lz) {
@@ -138,8 +180,13 @@ if (has_modules) {
                   tools::file_path_sans_ext(basename(tmp_lz)))
   cat(sprintf("--modules not provided; treating each of the %d LZ file(s) as one implicit module: %s\n",
               length(mods), paste(mods, collapse = ", ")))
+} else if (has_beta_panel && !is.null(meta) && "module" %in% names(meta)) {
+  mods <- sort(unique(as.character(stats::na.omit(meta$module))))
+  if (length(mods) == 0L)
+    stop("No modules found in --master (column 'module') for --modules omission.")
+  cat(sprintf("--modules not provided; using all %d module(s) from --master.\n", length(mods)))
 } else {
-  stop("Provide --modules or --lz_files; cannot derive modules otherwise.")
+  stop("Provide --modules, --lz_files, or (--umap + --master) so module IDs can be determined.")
 }
 n_items <- length(mods)
 
@@ -179,7 +226,7 @@ if (!is.null(opt$annotations)) {
 
 sum_tbl <- if (!is.null(opt$summary_table)) fread(opt$summary_table) else NULL
 
-umap <- NULL; merged <- NULL; meta <- NULL
+umap <- NULL; merged <- NULL
 if (has_umap) {
   umap <- fread(opt$umap)
   if ("UMAP_0" %in% names(umap) && "UMAP_1" %in% names(umap))
@@ -204,9 +251,7 @@ if (has_umap) {
     }
   }
 }
-if (has_master) meta <- fread(opt$master)
-
-cat("Generating plot grid...\n")
+# meta already loaded when has_master (see module list above).
 module_composites <- list()  # one patchwork per module (CS grid + merged box)
 total_cs_rows     <- 0L
 # Column layout: LZ, optional Beta UMAP, optional Coloc Z.
@@ -265,8 +310,9 @@ for (i in seq_len(n_items)) {
     next
   }
   
-  # LD matrix (r^2) for this module; all CSs share the same genotype file.
-  ld_mat <- if (has_ld) load_ld_matrix(ld_files[i]) else NULL
+  # LD matrix (r^2) for this module; skipped when LZ panels are merged (LD is
+  # disabled there; points are coloured by credible set instead).
+  ld_mat <- if (has_ld && !use_lz_merged) load_ld_matrix(ld_files[i]) else NULL
   
   z_tbl_mod <- NULL
   if (has_z) {
@@ -364,6 +410,117 @@ for (i in seq_len(n_items)) {
     }
   }
   
+  if (use_lz_merged && has_lz) {
+    cat(sprintf("  [%s] LocusZoom layout: merged (all credible sets in one panel).\n", mod_id))
+    p1 <- 1L
+    this_cell <- cs_rows$cell[p1]
+    this_gene <- cs_rows$eGene[p1]
+    this_sym  <- cs_rows$eGene_symbol[p1]
+    if (is.na(this_sym) || this_sym == "") this_sym <- this_gene
+    
+    disp_snp <- if (!is.na(mod_master_snp_lab) && nzchar(mod_master_snp_lab))
+                  mod_master_snp_lab else NA_character_
+    this_cs0 <- cs_rows$cs[p1]
+    if (is.na(disp_snp) && !is.na(this_cs0)) {
+      m <- regmatches(this_cs0,
+                      regexpr("chr[0-9XYM]+:\\d+:[ACGTN]+:[ACGTN]+",
+                              this_cs0, ignore.case = TRUE))
+      if (length(m) == 1 && nzchar(m)) disp_snp <- m
+    }
+    if (is.na(disp_snp) || disp_snp == "") disp_snp <- "Unknown_SNP"
+    snp_str <- ""; pval_str <- ""
+    if (valid_b && valid_se) {
+      p_dis <- if (se_dis != 0) 2 * pnorm(-abs(b_dis / se_dis)) else NA
+      p_str <- if (!is.na(p_dis)) sprintf(" | P = %.2e", p_dis) else " | P = NA"
+      snp_str  <- sprintf("\n%s | %s", trt, disp_snp)
+      pval_str <- sprintf(" | Beta = %.3f%s", b_dis, p_str)
+    } else {
+      snp_str <- sprintf("\n%s", disp_snp)
+      pval_str <- ""
+    }
+    lz_title <- paste0("LocusZoom (merged credible sets) | ", opt$name,
+                       " | ", this_cell, " | ", this_sym,
+                       "\n[", mod_id, "]", snp_str, pval_str)
+    
+    locus_info <- if (has_master)
+                    get_module_locus_info(meta, mod_id,
+                                          focal_cell = this_cell,
+                                          focal_gene = this_gene,
+                                          anno_col   = anno_col,
+                                          gene_col   = opt$gene_col)
+                  else NULL
+    if (is.null(locus_info)) locus_info <- list()
+    if (!is.na(cs_rows$lead_pos[p1])) {
+      locus_info$lead_pos <- cs_rows$lead_pos[p1]
+      if (is.null(locus_info$chrom) || is.na(locus_info$chrom))
+        locus_info$chrom <- cs_rows$chrom[p1]
+    }
+    if (is.null(locus_info$chrom) || is.na(locus_info$chrom)) {
+      lz_peek <- load_lz_file(lz_files[i])
+      if (!is.null(lz_peek) && nrow(lz_peek) > 0)
+        locus_info$chrom <- sub("^chr", "", as.character(lz_peek$CHR[1]),
+                                ignore.case = TRUE)
+    }
+    
+    lz_full <- load_lz_file(lz_files[i])
+    genes_region <- NULL
+    if (!is.null(gtf_tbl) && !is.null(locus_info) &&
+        !is.null(locus_info$chrom) && !is.na(locus_info$chrom) &&
+        !is.null(lz_full) && nrow(lz_full) > 0) {
+      win_s <- min(lz_full$POS, na.rm = TRUE)
+      win_e <- max(lz_full$POS, na.rm = TRUE)
+      if (!is.null(locus_info$gene_start) && !is.na(locus_info$gene_start))
+        win_s <- min(win_s, as.numeric(locus_info$gene_start))
+      if (!is.null(locus_info$gene_end) && !is.na(locus_info$gene_end))
+        win_e <- max(win_e, as.numeric(locus_info$gene_end))
+      genes_region <- get_genes_in_region(gtf_tbl, locus_info$chrom,
+                                          win_s, win_e)
+    }
+    
+    for (p_idx in seq_len(nrow(cs_rows))) {
+      this_cs   <- cs_rows$cs[p_idx]
+      this_cell_i <- cs_rows$cell[p_idx]
+      this_gene_i <- cs_rows$eGene[p_idx]
+      this_sym_i  <- cs_rows$eGene_symbol[p_idx]
+      if (is.na(this_sym_i) || this_sym_i == "") this_sym_i <- this_gene_i
+      if (!is.na(cs_rows$lead_pos[p_idx])) {
+        lead_bag <- c(lead_bag, cs_rows$lead_pos[p_idx])
+        l_tok <- if (!is.na(this_cs)) sub(".*::([^:]+)$", "\\1", this_cs) else NA_character_
+        short_sym <- if (!is.na(this_sym_i) && nchar(this_sym_i) > 0) this_sym_i else this_gene_i
+        lab <- paste(c(this_cell_i, short_sym,
+                       if (!is.na(l_tok) && nchar(l_tok) > 0 && l_tok != this_cs) l_tok else NULL),
+                     collapse = " | ")
+        cs_labels <- c(cs_labels, lab)
+      }
+      if (is.na(chr_for_mod) && !is.na(cs_rows$chrom[p_idx]) &&
+          nzchar(as.character(cs_rows$chrom[p_idx])))
+        chr_for_mod <- sub("^chr", "", as.character(cs_rows$chrom[p_idx]),
+                           ignore.case = TRUE)
+    }
+    if (is.na(chr_for_mod) && !is.null(locus_info) &&
+        !is.null(locus_info$chrom) && !is.na(locus_info$chrom))
+      chr_for_mod <- sub("^chr", "", locus_info$chrom, ignore.case = TRUE)
+    
+    if (!is.null(lz_full) && !("CS" %in% names(lz_full)))
+      cat(sprintf("Warning: --lz_layout merged expects a CS column in %s; plotting all rows together.\n",
+                  lz_files[i]))
+    
+    module_plots[[length(module_plots) + 1]] <- plot_locuszoom(
+      lz_files[i], locus_info,
+      title                  = lz_title,
+      genes_df               = genes_region,
+      annotations_tbl        = NULL,
+      annotation_tracks      = NULL,
+      zoom_window            = opt$zoom_window,
+      lz_filter_cell         = NULL,
+      lz_filter_gene         = NULL,
+      lz_filter_cs           = NULL,
+      include_zoom_panel     = FALSE,
+      include_zoom_connector = FALSE,
+      ld_vec                 = NULL,
+      force_lead_pos         = mod_master_snp_pos,
+      merge_all_cs           = TRUE)
+  } else {
   for (p_idx in seq_len(nrow(cs_rows))) {
     this_cs   <- cs_rows$cs[p_idx]
     this_cell <- cs_rows$cell[p_idx]
@@ -579,6 +736,7 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- build_zscore_column(
         z_tbl_mod, z_title, this_cs = this_cs)
     }
+  }
   }
   
   if (length(module_plots) == 0) next

@@ -1,0 +1,10 @@
+.git
+.gitignore
+*.png
+*.pdf
+__pycache__
+*.pyc
+.pytest_cache
+.cursor
+mcps
+*.md
