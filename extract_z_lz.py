@@ -43,8 +43,8 @@ tdb = tiledb.open(args.tiledb)
 
 selected_ids = qtl_adata_module.obs_names[qtl_adata_module.obs.index == args.qtl_module]
 qtl_adata_obs = qtl_adata_module[qtl_adata_module.obs_names.isin(selected_ids), :].copy()
-list_pheno = qtl_adata_obs.obs['phenotype_id'][0].split(", ")
-list_cs = qtl_adata_obs.obs['list_of_cs'][0].split(", ")
+list_pheno = qtl_adata_obs.obs["phenotype_id"].iloc[0].split(", ")
+list_cs = qtl_adata_obs.obs["list_of_cs"].iloc[0].split(", ")
 chrom = qtl_adata_obs.obs['chr'].iloc[0]
 
 if args.dis_adata and args.dis_cs:

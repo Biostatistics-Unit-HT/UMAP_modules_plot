@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
-# Single-population UMAP / LocusZoom / Coloc-Z-score plot.
-# Per module the figure row is: [LocusZoom] -> Beta UMAP -> [Coloc Z-scores].
+# Single-population UMAP / optional LocusZoom / optional Coloc-Z-score plot.
+# Per credible set the grid row is: [optional LocusZoom] -> Beta UMAP (optional) -> [optional Coloc Z].
 
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -61,9 +61,11 @@ option_list <- list(
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
   make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
-  make_option("--lz_files", type = "character", default = NULL, help = "Comma-separated paths to LocusZoom CSVs (use NA for missing). Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables (z_qtl, z_disease) belong in --z_files; repeating --lz_files leaves only the last path."),
+  make_option("--lz_files", type = "character", default = NULL, help = "Optional comma-separated LocusZoom CSVs (use NA for missing) when you want LocusZoom panels. Omit when using --umap + --master + --modules: credible sets come from the master table only. Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables belong in --z_files."),
   make_option("--lz_layout", type = "character", default = "stacked",
               help = "LocusZoom layout: 'stacked' (one row per credible set) or 'merged' (single panel, all CS overlaid; LZ-only, no beta UMAP or Z). Merged adds a bottom strip (genomic span per CS, same Mb axis)."),
+  make_option("--lz_xlim", type = "character", default = "context",
+              help = "LocusZoom x-axis span: 'context' (default) widens to focal eGene + genes from --gtf; 'snp' uses only min/max association POS in the panel (+ 2%% pad). Gene bodies may be clipped when using 'snp'."),
   make_option("--ld_files", type = "character", default = NULL, help = "Comma-separated paths to plink2 --export A .raw genotype files (use NA for missing). One per module; drives the r^2-based LD colouring of the LocusZoom points."),
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
@@ -85,7 +87,9 @@ option_list <- list(
   make_option("--png", action="store_true", default=FALSE, help="Save as PNG instead of PDF (PDF is default)"),
   make_option("--no_raster", action="store_true", default=FALSE, help="Disable rasterizing points (Raster is default)"),
   make_option("--show_ref", action="store_true", default=FALSE, help="Show the reference UMAP plot (Hidden by default)"),
-  make_option("--no_labels", action="store_true", default=FALSE, help="Hide active cell type labels (Shown by default)")
+  make_option("--no_labels", action="store_true", default=FALSE, help="Hide active cell type labels (Shown by default)"),
+  make_option("--beta_umap_all_cells", action="store_true", default=FALSE,
+              help="Colour beta on every cell type in each Beta UMAP (legacy). Default: only the focal cell type for that credible set is on-scale; others are grey.")
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
@@ -146,9 +150,15 @@ if (lz_layout_val == "merged" && (has_beta_panel || has_z)) {
 }
 use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_beta_panel && !has_z
 
+lz_xlim_mode <- tolower(trimws(as.character(opt$lz_xlim)))
+if (!lz_xlim_mode %in% c("context", "snp"))
+  stop("--lz_xlim must be 'context' or 'snp'.")
+
 # Need at least something to plot.
 if (!has_lz && !has_beta_panel)
-  stop("Nothing to plot: provide --lz_files and/or --umap + --master (omit --modules to use every module in --master when there is no --lz_files).")
+  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules or every module from master when --lz_files is omitted).")
+
+beta_umap_all_cells <- isTRUE(opt$beta_umap_all_cells)
 
 if (show_ref && is.null(opt$colors))
   stop("You must provide the --colors file if you enable --show_ref.")
@@ -519,7 +529,8 @@ for (i in seq_len(n_items)) {
       include_zoom_connector = FALSE,
       ld_vec                 = NULL,
       force_lead_pos         = mod_master_snp_pos,
-      merge_all_cs           = TRUE)
+      merge_all_cs           = TRUE,
+      xlim_mode              = lz_xlim_mode)
   } else {
   for (p_idx in seq_len(nrow(cs_rows))) {
     this_cs   <- cs_rows$cs[p_idx]
@@ -540,10 +551,22 @@ for (i in seq_len(n_items)) {
         jc_beta <- opt$join_col
         plot_df <- merged %>% left_join(beta_tbl, by = jc_beta) %>%
           mutate(beta_num = as.numeric(beta_val))
-        if (!is.null(cell_filter) && length(cell_filter) > 0) {
-          if (!jc_beta %in% names(plot_df)) {
-            stop("Beta UMAP: column ", jc_beta, " (--join_col) not found after joining master betas.")
-          }
+        if (!jc_beta %in% names(plot_df)) {
+          stop("Beta UMAP: column ", jc_beta, " (--join_col) not found after joining master betas.")
+        }
+        # Default: one Beta UMAP per credible set colours only that CS's focal
+        # cell type (others grey). --beta_umap_all_cells restores the old behaviour
+        # (every cell type on the diverging scale). --cell still restricts which
+        # CS rows exist; within a row, focal highlighting uses this_cell when known.
+        focal_one_cs <- !beta_umap_all_cells && !is.na(this_cell) &&
+          nzchar(as.character(this_cell))
+        if (focal_one_cs) {
+          focal <- as.character(plot_df[[jc_beta]]) == as.character(this_cell)
+          plot_df <- plot_df %>%
+            mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
+            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            select(-beta_num)
+        } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
           focal <- as.character(plot_df[[jc_beta]]) %in% cell_filter
           plot_df <- plot_df %>%
             mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
@@ -694,7 +717,8 @@ for (i in seq_len(n_items)) {
         include_zoom_panel     = FALSE,  # zoom panel is now one merged box per module
         include_zoom_connector = is_last_cs,
         ld_vec                 = ld_vec_cs,
-        force_lead_pos         = mod_master_snp_pos)
+        force_lead_pos         = mod_master_snp_pos,
+        xlim_mode              = lz_xlim_mode)
       
       if (!is.na(cs_rows$lead_pos[p_idx])) {
         lead_bag <- c(lead_bag, cs_rows$lead_pos[p_idx])
@@ -722,8 +746,15 @@ for (i in seq_len(n_items)) {
         use_raster = use_raster,
         show_labels = show_labels
       )
-      if ("label_cells_only" %in% names(formals(plot_beta)))
-        pb_args$label_cells_only <- cell_filter
+      if ("label_cells_only" %in% names(formals(plot_beta))) {
+        pb_args$label_cells_only <- if (!is.na(this_cell) && nzchar(as.character(this_cell))) {
+          as.character(this_cell)
+        } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
+          cell_filter
+        } else {
+          NULL
+        }
+      }
       module_plots[[length(module_plots) + 1]] <- do.call(plot_beta, pb_args)
     } else if (has_beta_panel) {
       # Column must stay aligned -- insert a blank placeholder when this

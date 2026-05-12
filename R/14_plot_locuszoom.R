@@ -2,10 +2,33 @@
 # per-CS zoom panel + optional connector strip. Uses helpers from
 # 01_io_gtf.R, 02_io_annotations.R, 03_io_lz.R, 04_io_ld.R, 13_plot_zoom.R.
 
+# clip_gene_segments_to_xlim(): clip gene arrow endpoints and label anchors to
+# the LocusZoom Mb window so geom_segment / ggrepel stay inside the panel.
+#
+# Example:
+#   df <- data.frame(seg_x = 79.99, seg_xend = 80.02, mid_mb = 80.005, lane = 1)
+#   clip_gene_segments_to_xlim(df, c(80.0, 80.05))
+clip_gene_segments_to_xlim <- function(track_df, x_lims_mb, eps_mb = 1e-6) {
+  x_lo <- x_lims_mb[1]
+  x_hi <- x_lims_mb[2]
+  track_df$seg_x_clip <- pmax(pmin(track_df$seg_x, x_hi), x_lo)
+  track_df$seg_xend_clip <- pmax(pmin(track_df$seg_xend, x_hi), x_lo)
+  track_df <- track_df[abs(track_df$seg_x_clip - track_df$seg_xend_clip) > eps_mb, ,
+                       drop = FALSE]
+  # Inset label anchors slightly from the boundary so ggrepel connector
+  # segments never originate exactly on (or outside) the panel border.
+  label_inset <- (x_hi - x_lo) * 0.01
+  track_df$mid_mb_clip <- pmax(pmin(track_df$mid_mb, x_hi - label_inset),
+                                x_lo + label_inset)
+  track_df
+}
+
 # plot_locuszoom(): composite LocusZoom panel.
 #   - main: -log10(P) vs position (Mb) with lead SNP highlighted
 #   - gene track: all protein-coding genes in the window (focal eGene red)
 #   - optional zoom: regulatory annotations within +/- zoom_window bp
+#   - xlim_mode "context" widens x-axis with eGene + GTF genes; "snp" uses
+#     association POS range only (+ small pad).
 #
 # Example:
 #   plot_locuszoom("j15_locuszoom_ENSG00000101546.csv",
@@ -27,7 +50,9 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                            include_zoom_connector = TRUE,
                            ld_vec = NULL,
                            force_lead_pos = NULL,
-                           merge_all_cs = FALSE) {
+                           merge_all_cs = FALSE,
+                           xlim_mode = c("context", "snp")) {
+  xlim_mode <- match.arg(xlim_mode)
   if (is.na(lz_file) || lz_file == "NA" || !file.exists(lz_file)) {
     if (!is.na(lz_file) && lz_file != "NA") cat(sprintf("Warning: LocusZoom file not found at %s\n", lz_file))
     return(plot_spacer())
@@ -72,7 +97,7 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
       return(plot_locuszoom_merged(
         df, locus_info, title, genes_df, annotations_tbl, annotation_tracks,
         zoom_window, include_zoom_panel, include_zoom_connector,
-        chr_label = chr_lab_m))
+        chr_label = chr_lab_m, xlim_mode = xlim_mode))
     }
   }
   
@@ -125,13 +150,17 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   has_many  <- !is.null(genes_df) && nrow(genes_df) > 0
   
   x_min_bp <- min(df$POS); x_max_bp <- max(df$POS)
-  if (has_focal) {
-    x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
-    x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
-  }
-  if (has_many) {
-    x_min_bp <- min(x_min_bp, min(genes_df$start))
-    x_max_bp <- max(x_max_bp, max(genes_df$end))
+  # context: widen x-axis with focal eGene + all genes in genes_df (GTF).
+  # snp: min/max association POS only (still adds small pad below).
+  if (identical(xlim_mode, "context")) {
+    if (has_focal) {
+      x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
+      x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
+    }
+    if (has_many) {
+      x_min_bp <- min(x_min_bp, min(genes_df$start))
+      x_max_bp <- max(x_max_bp, max(genes_df$end))
+    }
   }
   pad <- max((x_max_bp - x_min_bp) * 0.02, 1)
   x_lims_mb <- c((x_min_bp - pad) / 1e6, (x_max_bp + pad) / 1e6)
@@ -184,10 +213,10 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                  size = 1.6, alpha = 0.85, stroke = 0.25)
   }
   p_main <- p_main +
-    geom_point(data = df[is_lead == TRUE], aes(x = POS / 1e6, y = logp),
+    geom_point(data = df[is_lead == TRUE][1L], aes(x = POS / 1e6, y = logp),
                shape = 23, fill = "#8E24AA", color = "black",
                size = 3.5, stroke = 0.6, inherit.aes = FALSE) +
-    geom_text_repel(data = df[is_lead == TRUE],
+    geom_text_repel(data = df[is_lead == TRUE][1L],
                     aes(x = POS / 1e6, y = logp, label = lead_label),
                     size = 2.9, fontface = "bold", color = "#4A148C",
                     nudge_y = y_max * 0.08, segment.color = "#8E24AA",
@@ -283,44 +312,59 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   }
   track_df$is_focal <- !is.na(focal_sym) & track_df$gene_name == focal_sym
   track_df <- assign_gene_lanes(track_df)
-  n_lanes <- max(track_df$lane, 1L)
   track_df$seg_x    <- ifelse(track_df$strand == "-", track_df$end,   track_df$start) / 1e6
   track_df$seg_xend <- ifelse(track_df$strand == "-", track_df$start, track_df$end)   / 1e6
   track_df$mid_mb   <- (track_df$start + track_df$end) / 2 / 1e6
   track_df$col      <- ifelse(track_df$is_focal, "#C62828", "#1A237E")
-  
-  p_gene <- ggplot(track_df) +
-    geom_segment(aes(x = seg_x, xend = seg_xend, y = lane, yend = lane,
-                     color = I(col)),
-                 linewidth = 1.1,
-                 arrow = arrow(ends = "last", type = "closed",
-                               length = unit(0.07, "inches"))) +
-    # ggrepel pushes crowded labels apart and draws a thin leader line back
-    # to the gene arrow. Tweak `size` / `box.padding` below if you want
-    # tighter or looser packing.
-    geom_text_repel(aes(x = mid_mb, y = lane + 0.35, label = gene_name,
-                        color = I(col),
-                        fontface = ifelse(is_focal, "bold.italic", "italic")),
-                    size = 2.8,
-                    direction = "y",
-                    nudge_y = 0.25,
-                    box.padding = 0.2,
-                    point.padding = 0.1,
-                    segment.size = 0.45,
-                    segment.alpha = 0.75,
-                    min.segment.length = 0,
-                    max.overlaps = Inf,
-                    seed = 42) +
-    scale_y_continuous(limits = c(0.3, n_lanes + 1.2), breaks = NULL) +
-    coord_cartesian(xlim = x_lims_mb, clip = "off") +
-    labs(x = paste0("Chromosome ", chr_label, " position (Mb)"), y = NULL) +
-    theme_minimal() +
-    theme(panel.grid = element_blank(),
-          axis.text.y = element_blank(),
-          axis.title.x = element_text(size = 10, face = "bold"),
-          axis.text.x = element_text(size = 9),
-          panel.border = element_rect(color = "gray80", fill = NA, linewidth = 0.8),
-          plot.margin = margin(0, 5, 5, 5))
+  track_df <- clip_gene_segments_to_xlim(track_df, x_lims_mb)
+  if (nrow(track_df) == 0L) {
+    n_lanes <- 1L
+    p_gene <- ggplot() +
+      coord_cartesian(xlim = x_lims_mb, ylim = c(0.3, 1.2),
+                      clip = "on", expand = FALSE) +
+      labs(x = paste0("Chromosome ", chr_label, " position (Mb)"), y = NULL) +
+      theme_minimal() +
+      theme(panel.grid = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title.x = element_text(size = 10, face = "bold"),
+            axis.text.x = element_text(size = 9),
+            panel.border = element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+            plot.margin = margin(0, 5, 5, 5))
+  } else {
+    n_lanes <- max(track_df$lane, 1L)
+    p_gene <- ggplot(track_df) +
+      geom_segment(aes(x = seg_x_clip, xend = seg_xend_clip, y = lane, yend = lane,
+                       color = I(col)),
+                   linewidth = 1.1,
+                   arrow = arrow(ends = "last", type = "closed",
+                                 length = unit(0.07, "inches"))) +
+      geom_text_repel(aes(x = mid_mb_clip, y = lane + 0.35, label = gene_name,
+                          color = I(col),
+                          fontface = ifelse(is_focal, "bold.italic", "italic")),
+                      size = 2.8,
+                      direction = "y",
+                      nudge_y = 0.25,
+                      box.padding = 0.2,
+                      point.padding = 0.1,
+                      segment.size = 0.45,
+                      segment.alpha = 0.75,
+                      min.segment.length = 0,
+                      max.overlaps = Inf,
+                      seed = 42,
+                      xlim = c(x_lims_mb[1], x_lims_mb[2]),
+                      ylim = c(0.35, n_lanes + 1.55)) +
+      scale_y_continuous(limits = c(0.1, n_lanes + 1.7), breaks = NULL) +
+      coord_cartesian(xlim = x_lims_mb, ylim = c(0.1, n_lanes + 1.7),
+                      clip = "on", expand = FALSE) +
+      labs(x = paste0("Chromosome ", chr_label, " position (Mb)"), y = NULL) +
+      theme_minimal() +
+      theme(panel.grid = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title.x = element_text(size = 10, face = "bold"),
+            axis.text.x = element_text(size = 9),
+            panel.border = element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+            plot.margin = margin(0, 5, 5, 5))
+  }
   
   # Row heights scale with the number of stacked gene lanes and annotation
   # tracks so labels stay readable when the locus is gene-dense.
@@ -359,7 +403,9 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
 plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
                                   annotations_tbl, annotation_tracks,
                                   zoom_window, include_zoom_panel,
-                                  include_zoom_connector, chr_label) {
+                                  include_zoom_connector, chr_label,
+                                  xlim_mode = c("context", "snp")) {
+  xlim_mode <- match.arg(xlim_mode)
   data.table::setDT(df)
   data.table::setorderv(df, c("CS", "logp"), c(1, -1))
   df[, is_lead := (seq_len(.N) == 1L), by = CS]
@@ -376,13 +422,15 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
   has_many <- !is.null(genes_df) && nrow(genes_df) > 0
   x_min_bp <- min(df$POS, na.rm = TRUE)
   x_max_bp <- max(df$POS, na.rm = TRUE)
-  if (has_focal) {
-    x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
-    x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
-  }
-  if (has_many) {
-    x_min_bp <- min(x_min_bp, min(genes_df$start, na.rm = TRUE))
-    x_max_bp <- max(x_max_bp, max(genes_df$end, na.rm = TRUE))
+  if (identical(xlim_mode, "context")) {
+    if (has_focal) {
+      x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
+      x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
+    }
+    if (has_many) {
+      x_min_bp <- min(x_min_bp, min(genes_df$start, na.rm = TRUE))
+      x_max_bp <- max(x_max_bp, max(genes_df$end, na.rm = TRUE))
+    }
   }
   pad <- max((x_max_bp - x_min_bp) * 0.02, 1)
   x_lims_mb <- c((x_min_bp - pad) / 1e6, (x_max_bp + pad) / 1e6)
@@ -464,34 +512,52 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
   }
   track_df$is_focal <- !is.na(focal_sym) & track_df$gene_name == focal_sym
   track_df <- assign_gene_lanes(track_df)
-  n_lanes <- max(track_df$lane, 1L)
   track_df$seg_x <- ifelse(track_df$strand == "-", track_df$end, track_df$start) / 1e6
   track_df$seg_xend <- ifelse(track_df$strand == "-", track_df$start, track_df$end) / 1e6
   track_df$mid_mb <- (track_df$start + track_df$end) / 2 / 1e6
   track_df$col <- ifelse(track_df$is_focal, "#C62828", "#1A237E")
+  track_df <- clip_gene_segments_to_xlim(track_df, x_lims_mb)
 
-  p_gene <- ggplot2::ggplot(track_df) +
-    ggplot2::geom_segment(ggplot2::aes(x = seg_x, xend = seg_xend, y = lane, yend = lane,
-                                        color = I(col)),
-                          linewidth = 1.1,
-                          arrow = grid::arrow(ends = "last", type = "closed",
-                                              length = grid::unit(0.07, "inches"))) +
-    ggrepel::geom_text_repel(ggplot2::aes(x = mid_mb, y = lane + 0.35, label = gene_name,
-                                           color = I(col),
-                                           fontface = ifelse(is_focal, "bold.italic", "italic")),
-                             size = 2.8, direction = "y", nudge_y = 0.25,
-                             box.padding = 0.2, point.padding = 0.1,
-                             segment.size = 0.45, segment.alpha = 0.75,
-                             min.segment.length = 0, max.overlaps = Inf, seed = 42) +
-    ggplot2::scale_y_continuous(limits = c(0.3, n_lanes + 1.2), breaks = NULL) +
-    ggplot2::coord_cartesian(xlim = x_lims_mb, clip = "off") +
-    ggplot2::labs(x = NULL, y = NULL) +
-    ggplot2::theme_minimal() +
-    ggplot2::theme(
-      panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_blank(),
-      axis.text.x = ggplot2::element_blank(), axis.title.x = ggplot2::element_blank(),
-      panel.border = ggplot2::element_rect(color = "gray80", fill = NA, linewidth = 0.8),
-      plot.margin = ggplot2::margin(0, 5, 0, 5))
+  if (nrow(track_df) == 0L) {
+    n_lanes <- 1L
+    p_gene <- ggplot2::ggplot() +
+      ggplot2::coord_cartesian(xlim = x_lims_mb, ylim = c(0.3, 1.2),
+                               clip = "on", expand = FALSE) +
+      ggplot2::labs(x = NULL, y = NULL) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_blank(), axis.title.x = ggplot2::element_blank(),
+        panel.border = ggplot2::element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+        plot.margin = ggplot2::margin(0, 5, 0, 5))
+  } else {
+    n_lanes <- max(track_df$lane, 1L)
+    p_gene <- ggplot2::ggplot(track_df) +
+      ggplot2::geom_segment(ggplot2::aes(x = seg_x_clip, xend = seg_xend_clip, y = lane, yend = lane,
+                                         color = I(col)),
+                            linewidth = 1.1,
+                            arrow = grid::arrow(ends = "last", type = "closed",
+                                                length = grid::unit(0.07, "inches"))) +
+      ggrepel::geom_text_repel(ggplot2::aes(x = mid_mb_clip, y = lane + 0.35, label = gene_name,
+                                             color = I(col),
+                                             fontface = ifelse(is_focal, "bold.italic", "italic")),
+                               size = 2.8, direction = "y", nudge_y = 0.25,
+                               box.padding = 0.2, point.padding = 0.1,
+                               segment.size = 0.45, segment.alpha = 0.75,
+                               min.segment.length = 0, max.overlaps = Inf, seed = 42,
+                               xlim = c(x_lims_mb[1], x_lims_mb[2]),
+                               ylim = c(0.35, n_lanes + 1.55)) +
+      ggplot2::scale_y_continuous(limits = c(0.1, n_lanes + 1.7), breaks = NULL) +
+      ggplot2::coord_cartesian(xlim = x_lims_mb, ylim = c(0.1, n_lanes + 1.7),
+                               clip = "on", expand = FALSE) +
+      ggplot2::labs(x = NULL, y = NULL) +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(
+        panel.grid = ggplot2::element_blank(), axis.text.y = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_blank(), axis.title.x = ggplot2::element_blank(),
+        panel.border = ggplot2::element_rect(color = "gray80", fill = NA, linewidth = 0.8),
+        plot.margin = ggplot2::margin(0, 5, 0, 5))
+  }
 
   gene_weight <- max(1, min(n_lanes, 5))
   p_main / p_gene / p_strip +

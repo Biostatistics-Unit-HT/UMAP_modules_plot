@@ -5,3 +5,5 @@ scipy>=1.11
 scanpy>=1.9.3
 anndata>=0.10
 tiledb>=0.27
+# Required by tiledb ... .df[...] queries (dataframe / PyArrow integration)
+pyarrow>=14,<22

@@ -59,7 +59,8 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir 'pyarrow>=14,<22'
 
 COPY . /app
 
