@@ -35,11 +35,22 @@ plot_beta <- function(df, title, pt_size, join_col, show_legend = TRUE,
   }
   
   p <- p + scale_color_gradientn(colors = colors_beta,
-                                 limits = c(-b_max, b_max), na.value = "grey50",
+                                 limits = c(-b_max, b_max), na.value = "#dadada",
                                  name = "Beta",
                                  values = c(0.0, 0.20, 0.45, 0.5, 0.55, 0.80, 1.0)) +
-    coord_equal() + labs(title = title, x = NULL, y = NULL) + theme_minimal() +
-    theme(panel.grid = element_blank(), axis.text = element_blank(),
+    # UMAP_1 / UMAP_2 axes carry no numeric meaning, so remove their breaks
+    # at the SCALE level. Doing it via theme(axis.text = element_blank())
+    # alone is not enough because the outer `& big_helvetica_theme()`
+    # cascade later overrides axis.text and resurrects the tick labels.
+    scale_x_continuous(breaks = NULL) +
+    scale_y_continuous(breaks = NULL) +
+    # `clip = "off"` lets the ggrepel cell-type centroid labels draw past
+    # the panel edge -- at the bigger Helvetica size they sometimes start
+    # near the panel boundary and get truncated (e.g. "T_CD4_C" instead of
+    # "T_CD4_CM").
+    coord_equal(clip = "off") + labs(title = title, x = NULL, y = NULL) + theme_minimal() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_blank(), axis.ticks = element_blank(),
           plot.title  = element_text(size = 8.5, face = "bold"),
           legend.title = element_text(size = 12, face = "bold"),
           legend.text = element_text(size = 10))
@@ -59,8 +70,9 @@ plot_beta <- function(df, title, pt_size, join_col, show_legend = TRUE,
     }
     p <- p + geom_text_repel(data = centroids,
                              aes(x = UMAP_1, y = UMAP_2, label = label_text),
-                             inherit.aes = FALSE, size = 4.5,
-                             fontface = "bold", bg.color = "white", bg.r = 0.15,
+                             inherit.aes = FALSE, size = 7.5,
+                             family = "Helvetica", fontface = "plain",
+                             bg.color = "white", bg.r = 0.15,
                              color = "black", min.segment.length = 0)
   }
   return(p)

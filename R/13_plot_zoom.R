@@ -81,7 +81,8 @@ plot_zoom_annotations <- function(anno_win, chr_label, lead_pos, win_half,
   } else {
     p <- p + annotate("text", x = lead_pos, y = (n_tracks + 1) / 2,
                       label = "No annotations in window",
-                      size = 3.2, color = "gray55", fontface = "italic")
+                      family = "Helvetica", fontface = "italic",
+                      size = 5, color = "gray55")
   }
   # Row guides on top of rects so each bar lines up with its y-axis label.
   p <- p + geom_hline(yintercept = seq_len(n_tracks), colour = "gray58",
@@ -208,7 +209,8 @@ build_merged_zoom_box <- function(chr_label, lead_positions,
     p <- p + annotate("text",
                       x = mean(lead_positions), y = (n_tracks + 1) / 2,
                       label = "No annotations in merged window",
-                      size = 3.2, color = "gray55", fontface = "italic")
+                      family = "Helvetica", fontface = "italic",
+                      size = 5, color = "gray55")
   }
   p <- p + geom_hline(yintercept = seq_len(n_tracks), colour = "gray58",
                       linewidth = 0.2, alpha = 0.88)
@@ -236,7 +238,9 @@ build_merged_zoom_box <- function(chr_label, lead_positions,
                         alpha = 0.95, linewidth = 0.7)
     p <- p + geom_text_repel(data = extra_df,
                              aes(x = lead, y = n_tracks + 1.3, label = label),
-                             color = "#BF4F00", size = 2.7, fontface = "bold",
+                             color = "#BF4F00",
+                             family = "Helvetica", fontface = "plain",
+                             size = 5,
                              direction = "y", nudge_y = 0.2,
                              segment.size = 0.3, segment.alpha = 0.6,
                              box.padding = 0.25, point.padding = 0.1,

@@ -82,6 +82,15 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                 if (is.null(lz_filter_gene)) "*" else lz_filter_gene))
     return(plot_spacer())
   }
+  # Coerce POS to numeric defensively (fread can read POS as character when a
+  # row has commas/empty values, which later breaks `max(POS) - min(POS)` with
+  # "non-numeric argument to binary operator").
+  df[, POS := suppressWarnings(as.numeric(POS))]
+  df <- df[is.finite(POS)]
+  if (nrow(df) == 0) {
+    cat(sprintf("Warning: %s has no rows with a numeric POS column\n", lz_file))
+    return(plot_spacer())
+  }
   # `P` is the raw p-value; compute -log10 and floor to 0 to avoid -Inf.
   df[, logp := -log10(pmax(as.numeric(P), 1e-300))]
   
@@ -149,18 +158,29 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                !is.null(locus_info$gene_end)   && !is.na(locus_info$gene_end)
   has_many  <- !is.null(genes_df) && nrow(genes_df) > 0
   
-  x_min_bp <- min(df$POS); x_max_bp <- max(df$POS)
+  x_min_bp <- suppressWarnings(min(as.numeric(df$POS), na.rm = TRUE))
+  x_max_bp <- suppressWarnings(max(as.numeric(df$POS), na.rm = TRUE))
   # context: widen x-axis with focal eGene + all genes in genes_df (GTF).
   # snp: min/max association POS only (still adds small pad below).
   if (identical(xlim_mode, "context")) {
     if (has_focal) {
-      x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
-      x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
+      gs <- suppressWarnings(as.numeric(locus_info$gene_start))
+      ge <- suppressWarnings(as.numeric(locus_info$gene_end))
+      if (is.finite(gs)) x_min_bp <- min(x_min_bp, gs)
+      if (is.finite(ge)) x_max_bp <- max(x_max_bp, ge)
     }
     if (has_many) {
-      x_min_bp <- min(x_min_bp, min(genes_df$start))
-      x_max_bp <- max(x_max_bp, max(genes_df$end))
+      g_starts <- suppressWarnings(as.numeric(genes_df$start))
+      g_ends   <- suppressWarnings(as.numeric(genes_df$end))
+      g_starts <- g_starts[is.finite(g_starts)]
+      g_ends   <- g_ends[is.finite(g_ends)]
+      if (length(g_starts) > 0L) x_min_bp <- min(x_min_bp, min(g_starts))
+      if (length(g_ends)   > 0L) x_max_bp <- max(x_max_bp, max(g_ends))
     }
+  }
+  if (!is.finite(x_min_bp) || !is.finite(x_max_bp) || x_max_bp < x_min_bp) {
+    cat(sprintf("Warning: cannot derive a numeric x-range for %s; skipping LocusZoom panel.\n", lz_file))
+    return(plot_spacer())
   }
   pad <- max((x_max_bp - x_min_bp) * 0.02, 1)
   x_lims_mb <- c((x_min_bp - pad) / 1e6, (x_max_bp + pad) / 1e6)
@@ -179,7 +199,7 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   if (!is.null(ld_vec)) {
     # One point size for every SNP; only fill reflects LD bin. Draw
     # lower-LD points first so warmer colours sit on top.
-    PT_LZ <- 2.5
+    PT_LZ <- 3.5
     df_nonlead <- data.table::copy(df[is_lead == FALSE][order(as.integer(ld_bin),
                                                               na.last = FALSE)])
     # Invisible anchor layer: one off-screen point per bin so every LD
@@ -210,17 +230,21 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   } else {
     p_main <- p_main +
       geom_point(shape = 21, fill = "#4F8EDC", color = "white",
-                 size = 1.6, alpha = 0.85, stroke = 0.25)
+                 size = 3.0, alpha = 0.85, stroke = 0.25)
   }
   p_main <- p_main +
     geom_point(data = df[is_lead == TRUE][1L], aes(x = POS / 1e6, y = logp),
                shape = 23, fill = "#8E24AA", color = "black",
-               size = 3.5, stroke = 0.6, inherit.aes = FALSE) +
+               size = 5.0, stroke = 0.6, inherit.aes = FALSE) +
     geom_text_repel(data = df[is_lead == TRUE][1L],
                     aes(x = POS / 1e6, y = logp, label = lead_label),
-                    size = 2.9, fontface = "bold", color = "#4A148C",
-                    nudge_y = y_max * 0.08, segment.color = "#8E24AA",
-                    min.segment.length = 0, box.padding = 0.3,
+                    family = "Helvetica", fontface = "plain",
+                    size = 6.5, color = "#4A148C",
+                    # Push the label well clear of the diamond / SNP cloud so
+                    # it doesn't get buried in the LZ panel.
+                    nudge_y = y_max * 0.18,
+                    segment.color = "#8E24AA",
+                    min.segment.length = 0, box.padding = 0.45,
                     inherit.aes = FALSE) +
     coord_cartesian(xlim = x_lims_mb, ylim = c(0, y_max)) +
     labs(title = title, x = NULL, y = expression(-log[10](italic(P)))) +
@@ -259,6 +283,13 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   # us draw the top of the lines at the exact Mb position of the zoom
   # window while the bottom sits at the panel's full width -- where the
   # zoom panel starts.
+  # NOTE: build_zoom_connector() is intentionally label-less. We do NOT rely
+  # on theme_void() / axis.* = element_blank() to suppress text, because the
+  # outer `& big_helvetica_theme()` cascade later overrides those theme slots
+  # and would resurrect the default axis labels ("(lead_pos - zoom_window)/1e6"
+  # for x, "y" for y) plus tick text. Removing breaks at the SCALE level and
+  # setting labs(x=NULL, y=NULL, title=NULL, ...) survives the cascade because
+  # there are simply no breaks / labels to render.
   build_zoom_connector <- function() {
     ggplot() +
       geom_segment(aes(x = (lead_pos - zoom_window) / 1e6,
@@ -271,9 +302,15 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                        y = 1, yend = 0),
                    linewidth = 0.55, color = "#8E24AA",
                    linetype = "dashed", alpha = 0.75) +
+      scale_x_continuous(breaks = NULL, expand = c(0, 0)) +
+      scale_y_continuous(breaks = NULL, expand = c(0, 0)) +
       coord_cartesian(xlim = x_lims_mb, ylim = c(0, 1), expand = FALSE) +
+      labs(x = NULL, y = NULL, title = NULL, subtitle = NULL, caption = NULL) +
       theme_void() +
-      theme(plot.margin = margin(0, 5, 0, 5))
+      theme(plot.margin = margin(0, 5, 0, 5),
+            panel.background = element_blank(),
+            plot.background  = element_blank(),
+            legend.position  = "none")
   }
   
   if (!has_focal && !has_many) {
@@ -285,10 +322,13 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
     if (is.null(p_zoom)) return(p_main)
     p_link <- if (include_zoom_connector) build_zoom_connector() else NULL
     zoom_h <- max(1.2, 0.6 * length(annotation_tracks) + 0.6)
+    # Bumped the main Manhattan weight (5 -> 9) so it dominates the LZ
+    # column. The previous ratio left p_main paper-thin once the gene track,
+    # connector and zoom panel each claimed their own row underneath.
     if (is.null(p_link))
-      return(p_main / p_zoom + plot_layout(heights = c(5, zoom_h)))
+      return(p_main / p_zoom + plot_layout(heights = c(9, zoom_h)))
     return(p_main / p_link / p_zoom +
-             plot_layout(heights = c(5, 0.35, zoom_h)))
+             plot_layout(heights = c(9, 0.35, zoom_h)))
   }
   
   focal_sym <- if (!is.null(locus_info) &&
@@ -340,8 +380,9 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
                                  length = unit(0.07, "inches"))) +
       geom_text_repel(aes(x = mid_mb_clip, y = lane + 0.35, label = gene_name,
                           color = I(col),
-                          fontface = ifelse(is_focal, "bold.italic", "italic")),
-                      size = 2.8,
+                          fontface = ifelse(is_focal, "italic", "italic")),
+                      family = "Helvetica",
+                      size = 3.5,
                       direction = "y",
                       nudge_y = 0.25,
                       box.padding = 0.2,
@@ -382,14 +423,15 @@ plot_locuszoom <- function(lz_file, locus_info = NULL, title = "LocusZoom",
   
   if (is.null(p_zoom)) {
     if (is.null(p_link)) {
-      return(p_main / p_gene + plot_layout(heights = c(5, gene_weight)))
+      # Manhattan gets weight 9 (was 5) so it dominates the LZ column.
+      return(p_main / p_gene + plot_layout(heights = c(9, gene_weight)))
     }
     return(p_main / p_gene / p_link +
-             plot_layout(heights = c(5, gene_weight, 0.35)))
+             plot_layout(heights = c(9, gene_weight, 0.35)))
   }
   zoom_h <- max(1.2, 0.6 * length(annotation_tracks) + 0.6)
   p_main / p_gene / p_link / p_zoom +
-    plot_layout(heights = c(5, gene_weight, 0.35, zoom_h))
+    plot_layout(heights = c(9, gene_weight, 0.35, zoom_h))
 }
 
 # plot_locuszoom_merged(): one LocusZoom panel with all credible sets overlaid,
@@ -407,6 +449,12 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
                                   xlim_mode = c("context", "snp")) {
   xlim_mode <- match.arg(xlim_mode)
   data.table::setDT(df)
+  df[, POS := suppressWarnings(as.numeric(POS))]
+  df <- df[is.finite(POS)]
+  if (nrow(df) == 0) {
+    cat("Warning: merged LocusZoom has no rows with a numeric POS column.\n")
+    return(patchwork::plot_spacer())
+  }
   data.table::setorderv(df, c("CS", "logp"), c(1, -1))
   df[, is_lead := (seq_len(.N) == 1L), by = CS]
   df[, cs_id := factor(as.character(CS), levels = sort(unique(as.character(CS))))]
@@ -420,17 +468,27 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
     !is.null(locus_info$gene_start) && !is.na(locus_info$gene_start) &&
     !is.null(locus_info$gene_end) && !is.na(locus_info$gene_end)
   has_many <- !is.null(genes_df) && nrow(genes_df) > 0
-  x_min_bp <- min(df$POS, na.rm = TRUE)
-  x_max_bp <- max(df$POS, na.rm = TRUE)
+  x_min_bp <- suppressWarnings(min(as.numeric(df$POS), na.rm = TRUE))
+  x_max_bp <- suppressWarnings(max(as.numeric(df$POS), na.rm = TRUE))
   if (identical(xlim_mode, "context")) {
     if (has_focal) {
-      x_min_bp <- min(x_min_bp, as.numeric(locus_info$gene_start))
-      x_max_bp <- max(x_max_bp, as.numeric(locus_info$gene_end))
+      gs <- suppressWarnings(as.numeric(locus_info$gene_start))
+      ge <- suppressWarnings(as.numeric(locus_info$gene_end))
+      if (is.finite(gs)) x_min_bp <- min(x_min_bp, gs)
+      if (is.finite(ge)) x_max_bp <- max(x_max_bp, ge)
     }
     if (has_many) {
-      x_min_bp <- min(x_min_bp, min(genes_df$start, na.rm = TRUE))
-      x_max_bp <- max(x_max_bp, max(genes_df$end, na.rm = TRUE))
+      g_starts <- suppressWarnings(as.numeric(genes_df$start))
+      g_ends   <- suppressWarnings(as.numeric(genes_df$end))
+      g_starts <- g_starts[is.finite(g_starts)]
+      g_ends   <- g_ends[is.finite(g_ends)]
+      if (length(g_starts) > 0L) x_min_bp <- min(x_min_bp, min(g_starts))
+      if (length(g_ends)   > 0L) x_max_bp <- max(x_max_bp, max(g_ends))
     }
+  }
+  if (!is.finite(x_min_bp) || !is.finite(x_max_bp) || x_max_bp < x_min_bp) {
+    cat("Warning: cannot derive a numeric x-range for merged LocusZoom; skipping.\n")
+    return(patchwork::plot_spacer())
   }
   pad <- max((x_max_bp - x_min_bp) * 0.02, 1)
   x_lims_mb <- c((x_min_bp - pad) / 1e6, (x_max_bp + pad) / 1e6)
@@ -475,7 +533,7 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
                                           ymin = 0, ymax = 1, fill = cs_f)) +
     ggplot2::geom_rect(color = "gray35", linewidth = 0.25) +
     ggplot2::geom_text(ggplot2::aes(x = (xmin_mb + xmax_mb) / 2, y = 0.5, label = lab),
-                       size = 2.35, color = "black") +
+                       family = "Helvetica", size = 4.0, color = "black") +
     ggplot2::scale_fill_manual(values = pal_named, drop = FALSE, guide = "none") +
     ggplot2::coord_cartesian(xlim = x_lims_mb, ylim = c(0, 1), expand = FALSE) +
     ggplot2::labs(
@@ -493,7 +551,7 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
       plot.margin = ggplot2::margin(0, 5, 4, 5))
 
   if (!has_focal && !has_many) {
-    return(p_main / p_strip + patchwork::plot_layout(heights = c(5.2, 1.05)))
+    return(p_main / p_strip + patchwork::plot_layout(heights = c(9.0, 1.05)))
   }
 
   focal_sym <- if (!is.null(locus_info) && !is.null(locus_info$gene_symbol) &&
@@ -540,8 +598,9 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
                                                 length = grid::unit(0.07, "inches"))) +
       ggrepel::geom_text_repel(ggplot2::aes(x = mid_mb_clip, y = lane + 0.35, label = gene_name,
                                              color = I(col),
-                                             fontface = ifelse(is_focal, "bold.italic", "italic")),
-                               size = 2.8, direction = "y", nudge_y = 0.25,
+                                             fontface = ifelse(is_focal, "italic", "italic")),
+                               family = "Helvetica",
+                               size = 3.5, direction = "y", nudge_y = 0.25,
                                box.padding = 0.2, point.padding = 0.1,
                                segment.size = 0.45, segment.alpha = 0.75,
                                min.segment.length = 0, max.overlaps = Inf, seed = 42,
@@ -561,5 +620,5 @@ plot_locuszoom_merged <- function(df, locus_info, title, genes_df,
 
   gene_weight <- max(1, min(n_lanes, 5))
   p_main / p_gene / p_strip +
-    patchwork::plot_layout(heights = c(5.2, gene_weight, 1.05))
+    patchwork::plot_layout(heights = c(9.0, gene_weight, 1.05))
 }
