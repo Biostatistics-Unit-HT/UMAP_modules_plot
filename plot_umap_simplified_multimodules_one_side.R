@@ -448,7 +448,7 @@ for (i in seq_len(n_items)) {
       snp_str <- sprintf("\n%s", disp_snp)
       pval_str <- ""
     }
-    lz_title <- paste0("LocusZoom (merged credible sets) | ", opt$name,
+    lz_title <- paste0("LocusZoom (merged credible sets)\n", opt$name,
                        " | ", this_cell, " | ", this_sym,
                        "\n[", mod_id, "]", snp_str, pval_str)
     
@@ -636,8 +636,11 @@ for (i in seq_len(n_items)) {
           locus_info$chrom <- sub("^chr","", as.character(lz_peek$CHR[1]),
                                   ignore.case = TRUE)
       }
-      lz_title <- paste0("LocusZoom | ", opt$name, " | ", this_cell, " | ",
-                         this_sym, "\n[", mod_id, "]")
+      # Wrap onto 3 short lines so the title fits inside the narrower
+      # LocusZoom column at the new (bigger) Helvetica font size. The
+      # pipe-separated form on a single line overflowed past the panel.
+      lz_title <- paste0("LocusZoom | ", opt$name, "\n",
+                         this_cell, " | ", this_sym, "\n[", mod_id, "]")
       
       # Region for the gene track: union of SNP extents (filtered) + eGene body.
       genes_region <- NULL
@@ -762,7 +765,7 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {
-      z_title <- paste0("Coloc Z-Scores | ", this_cell, " | ", this_sym,
+      z_title <- paste0("Coloc Z-Scores\n", this_cell, " | ", this_sym,
                        "\n[", mod_id, "]")
       module_plots[[length(module_plots) + 1]] <- build_zscore_column(
         z_tbl_mod, z_title, this_cs = this_cs)
@@ -774,7 +777,22 @@ for (i in seq_len(n_items)) {
   
   n_cs_for_mod <- length(module_plots) %/% cols
   total_cs_rows <- total_cs_rows + n_cs_for_mod
-  cs_grid <- wrap_plots(module_plots, ncol = cols)
+  # Per-CS-row column widths: LocusZoom (when present) is rendered narrower
+  # than the other side panels (beta UMAP, Z-score) but with enough room for
+  # its multi-line title and gene track to lay out cleanly. The figure-wide
+  # plot_width below scales by sum(col_widths) so the other panels actually
+  # close the gap instead of leaving empty horizontal space (beta + z-score
+  # use coord_equal()/coord_fixed() and can't grow into the slack).
+  col_widths <- rep(1, cols)
+  if (has_lz) col_widths[1] <- 1.2
+  cs_grid <- wrap_plots(module_plots, ncol = cols) +
+             patchwork::plot_layout(widths = col_widths)
+  # Apply the global Helvetica / large / plain text styling NOW, before
+  # wrap_elements() makes cs_grid atomic. `& theme()` does NOT propagate
+  # through wrap_elements(), so the final `final_plot & big_helvetica_theme()`
+  # at the bottom never reaches the LZ / beta / Z panels -- only the merged
+  # annotation box and (when shown) the reference UMAP.
+  cs_grid <- cs_grid & big_helvetica_theme(base_size = 18)
   
   # Merged, full-width annotation box for the whole module.
   if (!is.null(annotations_tbl) && !is.null(annotation_tracks) &&
@@ -799,12 +817,35 @@ for (i in seq_len(n_items)) {
           lab <- as.character(mod_master_snp_id)
         lab
       })
-    # Heights: each CS row ~5 units, merged box ~2 units. Keeps the box
-    # readable without dominating the figure. Wrapping `cs_grid` with
-    # `wrap_elements()` keeps it atomic so `/` stacks two blocks rather
-    # than flattening the inner panels (which breaks when cols == 1).
+    # The merged annotation box was full-width before, which made it look
+    # disconnected from the LocusZoom even though they share the same
+    # genomic axis. Now we put it in a 1-row patchwork beside `plot_spacer()`
+    # blocks for the beta / Z columns and reuse the SAME col_widths, so the
+    # box visually anchors directly under the LocusZoom column.
+    #
+    # It also uses a slightly smaller base text size than the top panels
+    # since its column is narrower (text wraps better at ~14 pt).
+    merged_box <- merged_box + big_helvetica_theme(base_size = 14)
+    if (cols > 1L) {
+      merged_row_parts <- c(list(merged_box),
+                            replicate(cols - 1L, patchwork::plot_spacer(),
+                                      simplify = FALSE))
+      merged_row <- patchwork::wrap_plots(merged_row_parts, ncol = cols) +
+                    patchwork::plot_layout(widths = col_widths)
+    } else {
+      merged_row <- merged_box
+    }
+    # Heights: each CS row ~5 units, merged box ~1.5 units (lowered from 2
+    # so the top row keeps more vertical real-estate, since its panels are
+    # the larger / more information-dense ones). Wrapping `cs_grid` AND the
+    # merged row with `wrap_elements()` keeps each block atomic so `/` stacks
+    # them cleanly without flattening inner panels.
+    # merged_h bumped slightly (1.5 -> 2) so the y-axis track labels
+    # (promoter_flanking_region, open_chromatin_region, ...) don't end up
+    # stacked on top of each other now that the merged box is also
+    # narrower (LZ-column width only).
     merged_h <- 2
-    composite <- wrap_elements(cs_grid) / merged_box +
+    composite <- wrap_elements(cs_grid) / wrap_elements(merged_row) +
       plot_layout(heights = c(n_cs_for_mod * 5, merged_h))
     module_composites[[length(module_composites) + 1]] <- composite
     total_cs_rows <- total_cs_rows + (merged_h / 5)  # ~0.4 row-equivalents
@@ -822,18 +863,29 @@ grid_plot <- if (length(module_composites) == 1) {
              }
 n_rows <- max(1, total_cs_rows)
 
+# Effective per-row width is the sum of col_widths (the LZ slot is 0.5,
+# others are 1) -- not `cols` -- so when the LZ is halved the row shrinks
+# accordingly instead of leaving empty horizontal space.
+row_w <- sum(col_widths)
 if (show_ref) {
   p_ref <- plot_ref(merged, paste(opt$name, "Reference"), opt$join_col, opt$pt_size, use_raster)
   final_plot <- p_ref | grid_plot
-  final_plot <- final_plot + plot_layout(widths = c(1, cols))
-  plot_width <- (cols + 1) * 6
+  final_plot <- final_plot + plot_layout(widths = c(1, row_w))
+  plot_width <- (row_w + 1) * 6
 } else {
   final_plot <- grid_plot
-  plot_width <- cols * 6
+  plot_width <- row_w * 6
 }
 
-base_height <- 4.5
-plot_height <- max(base_height * n_rows, 5)
+# Bumped from 4.5 to 6 so the top row's panels (LZ, beta UMAP, Z-score) keep
+# enough vertical room after the new bigger Helvetica titles + bigger axis text.
+base_height <- 6
+plot_height <- max(base_height * n_rows, 6)
+
+# Helvetica / large / plain text on the outer patchwork. This reaches the
+# merged annotation box and (when present) the reference UMAP. The inner
+# LZ / beta / Z grid was already styled above before wrap_elements().
+final_plot <- final_plot & big_helvetica_theme(base_size = 18)
 
 # --- Save Logic ---
 out_base <- sub("\\.png$|\\.pdf$", "", opt$out, ignore.case = TRUE)

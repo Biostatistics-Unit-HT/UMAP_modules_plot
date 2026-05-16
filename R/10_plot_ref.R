@@ -23,10 +23,17 @@ plot_ref <- function(df, title_text, join_col, pt_size, use_raster) {
   }
   p + scale_color_identity() +
     geom_text_repel(data = centroids, aes(label = .data[[join_col]]),
-                    size = 3.5, fontface = "bold", bg.color = "white",
+                    family = "Helvetica", fontface = "plain",
+                    size = 6, bg.color = "white",
                     bg.r = 0.1, min.segment.length = 0) +
+    # UMAP dimensions carry no numeric meaning -- remove breaks at the scale
+    # level so the global theme cascade can't reintroduce tick labels.
+    scale_x_continuous(breaks = NULL) +
+    scale_y_continuous(breaks = NULL) +
     coord_equal() + labs(title = title_text, x = NULL, y = NULL) +
     theme_minimal() +
-    theme(panel.grid = element_blank(), axis.text = element_blank(),
+    theme(panel.grid = element_blank(),
+          axis.text  = element_blank(),
+          axis.ticks = element_blank(),
           plot.title = element_text(face = "bold"))
 }

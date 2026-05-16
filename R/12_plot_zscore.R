@@ -69,7 +69,7 @@ plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL) 
     geom_abline(slope = 1, intercept = 0, color = "gray80", linetype = "dotted") +
     geom_abline(slope = -1, intercept = 0, color = "gray80", linetype = "dotted") +
     geom_point(fill = "#1E90FF", color = "white", shape = 21,
-               size = 2.5, alpha = 0.8, stroke = 0.3) +
+               size = 3.5, alpha = 0.8, stroke = 0.3) +
     coord_fixed(xlim = c(-limit_val, limit_val), ylim = c(-limit_val, limit_val)) +
     theme_minimal() +
     labs(title = title, x = "QTL Z-Score", y = "Disease Z-Score") +
