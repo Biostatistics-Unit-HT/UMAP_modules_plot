@@ -78,8 +78,9 @@ option_list <- list(
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
   # General Settings
-  make_option("--join_col", type = "character", default = "celltype_2", help = "Column name in UMAP for celltypes [default: %default]"),
+  make_option("--join_col", type = "character", default = "celltype_2", help = "Column name in UMAP for celltypes used for JOIN / FILTER logic: --cell matching, joining to --master, and identifying focal cells from --cs_name [default: %default]."),
   make_option("--anno_join_col", type = "character", default = NULL, help = "Column name in Master Annotations (if different from join_col)"),
+  make_option("--label_col", type = "character", default = NULL, help = "Column name in UMAP used ONLY for the cell-type LABELS drawn on the Beta / Reference UMAPs (centroid text). Defaults to --join_col. Set this to e.g. 'celltype_3' to label cells at a different granularity from the one used to join with --master / --cell. When --label_col differs from --join_col, only label-column groups that contain at least one focal cell (per --join_col) are labelled."),
   make_option("--gene_col", type = "character", default = "eGene_symbol", help = "Column name for gene symbol [default: %default]"),
   make_option("--gtf", type = "character", default = NULL, help = "Optional GENCODE GTF (e.g. gencode.v49.annotation.gtf) or a pre-built .coding_genes.tsv. When supplied, the LocusZoom gene track shows every protein-coding gene in the window."),
   make_option("--annotations", type = "character", default = NULL, help = "Optional comma-separated annotation file(s) to show in a zoom panel around the lead SNP. BED-style (chrom, start, end, feature_type [, score]) or full 9-col GFF. A numeric 5th column turns the lane into a continuous profile."),
@@ -856,6 +857,13 @@ for (i in seq_len(n_items)) {
         use_raster = use_raster,
         show_labels = show_labels
       )
+      # --label_col (when supported) lets the user label cells at a different
+      # granularity (e.g. celltype_3) than the join column used to colour /
+      # filter focal cells (e.g. celltype_2). Defaults to opt$join_col so
+      # behaviour is unchanged when the flag isn't set.
+      if ("label_col" %in% names(formals(plot_beta))) {
+        pb_args$label_col <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+      }
       if ("label_cells_only" %in% names(formals(plot_beta))) {
         pb_args$label_cells_only <- if (!is.na(this_cell) && nzchar(as.character(this_cell))) {
           as.character(this_cell)
@@ -975,7 +983,11 @@ n_rows <- max(1, total_cs_rows)
 # accordingly instead of leaving empty horizontal space.
 row_w <- sum(col_widths)
 if (show_ref) {
-  p_ref <- plot_ref(merged, paste(opt$name, "Reference"), opt$join_col, opt$pt_size, use_raster)
+  ref_label_col <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+  pr_args <- list(merged, paste(opt$name, "Reference"), opt$join_col,
+                  opt$pt_size, use_raster)
+  if ("label_col" %in% names(formals(plot_ref))) pr_args$label_col <- ref_label_col
+  p_ref <- do.call(plot_ref, pr_args)
   final_plot <- p_ref | grid_plot
   final_plot <- final_plot + plot_layout(widths = c(1, row_w))
   plot_width <- (row_w + 1) * 6
