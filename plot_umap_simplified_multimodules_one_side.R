@@ -57,6 +57,14 @@ option_list <- list(
   make_option("--umap", type = "character", default = NULL, help = "Path to UMAP TSV (optional). Omit to skip the Beta UMAP panel. Pair with --master to enable it."),
   make_option("--master", type = "character", default = NULL, help = "Path to Master Annotations TSV (optional). Used for per-(cell, gene) betas, gene-track symbol lookups and the module-level most-likely SNP."),
   make_option("--modules", type = "character", default = NULL, help = "Comma-separated Module IDs (optional). When omitted the script treats each --lz_files entry as one implicit module and uses the top -log10(P) SNP as the anchor."),
+  # Manual / single-CS mode: bypass --master and --modules by spelling out
+  # the credible-set string + a single focal beta. Useful when you only have
+  # an ad-hoc beta for one (cell, gene, snp) and don't want to materialise a
+  # master annotation TSV just to plot it.
+  make_option("--cs_name", type = "character", default = NULL,
+              help = "Manual credible-set identifier, e.g. 'chr22::study::NK_CD16_adaptive:ENSG00000015475::chr22:17604981:C:T::L1'. When set together with --beta_cs the script runs in MANUAL mode: --master and --modules are ignored (a notice is printed if they are also set) and the cell / gene / chromosome / lead SNP are parsed from this string. --cell, when provided, overrides the cell parsed from --cs_name."),
+  make_option("--beta_cs", type = "numeric", default = NA_real_,
+              help = "Beta value used to colour the focal cell type on the Beta UMAP when --cs_name is set (manual mode). The diverging colour scale is centred at 0 and its extent is |--beta_cs|."),
   
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
@@ -134,9 +142,42 @@ has_z       <- has_nonempty_char(opt$z_files)
 has_lz      <- has_nonempty_char(opt$lz_files)
 has_ld      <- has_nonempty_char(opt$ld_files)
 
-# Beta UMAP needs both the UMAP coords and the master annotation.
-has_beta_panel <- has_umap && has_master
-if (has_umap && !has_master)
+# --- MANUAL MODE: --cs_name + --beta_cs ---
+# A single credible-set identifier (--cs_name) plus a single beta (--beta_cs)
+# lets you plot one (cell, gene, snp) without supplying --master or --modules.
+# Both flags must be set together. When active, parse_cs(--cs_name) provides
+# the focal cell, gene, chromosome and lead SNP; --beta_cs is the beta used
+# to colour the focal cell type on the Beta UMAP. --cell, if set, overrides
+# the parsed cell.
+cs_name_set <- has_nonempty_char(opt$cs_name)
+beta_cs_set <- !is.null(opt$beta_cs) && length(opt$beta_cs) == 1L &&
+               is.finite(suppressWarnings(as.numeric(opt$beta_cs)))
+if (cs_name_set != beta_cs_set)
+  stop("--cs_name and --beta_cs must be provided together (or neither).")
+manual_mode <- cs_name_set && beta_cs_set
+parsed_cs <- if (manual_mode) parse_cs(opt$cs_name) else NULL
+manual_label <- NA_character_
+if (manual_mode) {
+  toks     <- strsplit(opt$cs_name, "::", fixed = TRUE)[[1]]
+  last_tok <- if (length(toks) > 0L) tail(toks, 1L) else ""
+  manual_label <- if (length(last_tok) == 1L && grepl("^L\\d+$", last_tok)) last_tok
+                  else if (!is.na(parsed_cs$chrom) && !is.na(parsed_cs$lead_pos))
+                    sprintf("chr%s:%d", parsed_cs$chrom, as.integer(parsed_cs$lead_pos))
+                  else "manual_cs"
+  if (has_master)
+    cat("Note: --master is ignored in --cs_name manual mode.\n")
+  if (has_modules)
+    cat("Note: --modules is ignored in --cs_name manual mode.\n")
+  opt$master  <- NULL
+  opt$modules <- manual_label   # feeds the existing has_modules branch below
+  has_master  <- FALSE
+  has_modules <- TRUE
+}
+
+# Beta UMAP needs --umap; per-cell colour comes from --master OR (in manual
+# mode) from --beta_cs.
+has_beta_panel <- has_umap && (has_master || manual_mode)
+if (has_umap && !has_master && !manual_mode)
   cat("Note: --umap provided without --master; the Beta UMAP panel is skipped (master annotations hold the per-(cell, gene) betas).\n")
 if (has_master && !has_umap)
   cat("Note: --master provided without --umap; the Beta UMAP panel is skipped (no embedding to plot on).\n")
@@ -156,7 +197,7 @@ if (!lz_xlim_mode %in% c("context", "snp"))
 
 # Need at least something to plot.
 if (!has_lz && !has_beta_panel)
-  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules or every module from master when --lz_files is omitted).")
+  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules), or --umap + --cs_name + --beta_cs (manual single-CS mode).")
 
 beta_umap_all_cells <- isTRUE(opt$beta_umap_all_cells)
 
@@ -312,9 +353,26 @@ for (i in seq_len(n_items)) {
   # available, otherwise fall back to (cell, gene) in master). Each CS
   # produces one grid row of [LocusZoom | Beta UMAP | optional Coloc Z].
   lz_path  <- if (has_lz) lz_files[i] else NULL
-  cs_rows  <- module_cs_list(lz_path, meta, mod_id, anno_col,
-                             cell_filter = cell_filter,
-                             gene_filter = gene_filter)
+  if (manual_mode) {
+    # In manual mode we don't have a master annotation to enumerate
+    # (cell, gene) pairs from, so synthesise exactly one row from
+    # parse_cs(--cs_name). --cell (when provided) wins over the parsed cell.
+    pc <- parsed_cs
+    focal_cell_man <- if (!is.null(cell_filter) && length(cell_filter) > 0L)
+                       cell_filter[1] else pc$cell
+    cs_rows <- data.table::data.table(
+      cs           = opt$cs_name,
+      cell         = focal_cell_man,
+      eGene        = pc$eGene,
+      eGene_symbol = pc$eGene,  # no symbol lookup without master
+      chrom        = pc$chrom,
+      lead_pos     = pc$lead_pos
+    )
+  } else {
+    cs_rows  <- module_cs_list(lz_path, meta, mod_id, anno_col,
+                               cell_filter = cell_filter,
+                               gene_filter = gene_filter)
+  }
   if (nrow(cs_rows) == 0) {
     cat(sprintf("Warning: Module %s has no credible sets matching the filters - skipping.\n", mod_id))
     next
@@ -354,7 +412,23 @@ for (i in seq_len(n_items)) {
   mod_master_snp_pos <- NA_real_
   mod_master_snp_lab <- NA_character_
   mod_master_snp_id  <- NA_character_   # "chr<N>:<pos>:<ref>:<alt>" for LD lookup
-  if (has_master) {
+  if (manual_mode) {
+    # Anchor SNP comes from the parsed --cs_name. Try to use the full
+    # chr:pos:ref:alt token (better LD lookup); fall back to chr:pos:N:N.
+    mod_master_snp_pos <- parsed_cs$lead_pos
+    pc_tok <- regmatches(opt$cs_name,
+                         regexpr("chr[0-9XYM]+:\\d+:[ACGTN]+:[ACGTN]+",
+                                 opt$cs_name, ignore.case = TRUE))
+    if (length(pc_tok) == 1L && nzchar(pc_tok)) {
+      mod_master_snp_lab <- pc_tok
+      mod_master_snp_id  <- pc_tok
+    } else if (!is.na(parsed_cs$chrom) && !is.na(parsed_cs$lead_pos)) {
+      mod_master_snp_lab <- sprintf("chr%s:%d", parsed_cs$chrom,
+                                    as.integer(parsed_cs$lead_pos))
+      mod_master_snp_id  <- sprintf("chr%s:%d:N:N", parsed_cs$chrom,
+                                    as.integer(parsed_cs$lead_pos))
+    }
+  } else if (has_master) {
     mrows <- meta %>% filter(module == mod_id)
     if ("cs_max_pip" %in% names(mrows))
       mrows <- mrows %>% arrange(desc(as.numeric(cs_max_pip)))
@@ -452,13 +526,20 @@ for (i in seq_len(n_items)) {
                        " | ", this_cell, " | ", this_sym,
                        "\n[", mod_id, "]", snp_str, pval_str)
     
-    locus_info <- if (has_master)
+    locus_info <- if (manual_mode) {
+                    list(chrom       = parsed_cs$chrom,
+                         gene_start  = NA_real_,
+                         gene_end    = NA_real_,
+                         gene_strand = NA_character_,
+                         gene_symbol = parsed_cs$eGene,
+                         lead_pos    = parsed_cs$lead_pos)
+                  } else if (has_master) {
                     get_module_locus_info(meta, mod_id,
                                           focal_cell = this_cell,
                                           focal_gene = this_gene,
                                           anno_col   = anno_col,
                                           gene_col   = opt$gene_col)
-                  else NULL
+                  } else NULL
     if (is.null(locus_info)) locus_info <- list()
     if (!is.na(cs_rows$lead_pos[p1])) {
       locus_info$lead_pos <- cs_rows$lead_pos[p1]
@@ -539,11 +620,26 @@ for (i in seq_len(n_items)) {
     this_sym  <- cs_rows$eGene_symbol[p_idx]
     if (is.na(this_sym) || this_sym == "") this_sym <- this_gene
     
-    # Beta UMAP is only produced when both --umap and --master are set.
+    # Beta UMAP is produced when --umap is set together with either --master
+    # or the manual --cs_name + --beta_cs pair.
     plot_df <- NULL
     if (has_beta_panel) {
-      beta_tbl <- get_module_betas(meta, mod_id, focal_gene = this_gene,
-                                   anno_col, opt$join_col, opt$gene_col)
+      beta_tbl <- if (manual_mode) {
+        # One-row synthetic beta table: the focal cell (parsed from --cs_name
+        # or overridden by --cell) gets --beta_cs, everyone else stays NA
+        # (rendered grey by plot_beta() via na.value).
+        tibble::tibble(
+          !!opt$join_col := as.character(this_cell),
+          beta_val      = as.numeric(opt$beta_cs),
+          gene_sym_col  = as.character(this_sym),
+          mod_id_col    = as.character(mod_id),
+          snp_id        = NA_character_,
+          pval_exact    = NA_real_
+        )
+      } else {
+        get_module_betas(meta, mod_id, focal_gene = this_gene,
+                         anno_col, opt$join_col, opt$gene_col)
+      }
       if (is.null(beta_tbl)) {
         cat(sprintf("Warning: No beta rows for module %s, gene %s - skipping Beta UMAP for this CS.\n",
                     mod_id, this_gene))
@@ -564,13 +660,17 @@ for (i in seq_len(n_items)) {
           focal <- as.character(plot_df[[jc_beta]]) == as.character(this_cell)
           plot_df <- plot_df %>%
             mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
-            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            # Draw non-focal (NA -> grey) cells FIRST so they sit in the
+            # background; then focal cells in ascending |beta| so the most
+            # extreme blues/reds end up on top and remain visible instead of
+            # being painted over by the grey layer.
+            arrange(desc(!focal), abs(coalesce(beta_val, 0))) %>%
             select(-beta_num)
         } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
           focal <- as.character(plot_df[[jc_beta]]) %in% cell_filter
           plot_df <- plot_df %>%
             mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
-            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            arrange(desc(!focal), abs(coalesce(beta_val, 0))) %>%
             select(-beta_num)
         } else {
           plot_df <- plot_df %>%
@@ -616,13 +716,20 @@ for (i in seq_len(n_items)) {
       # Build locus info. If the master annotation is available, use it for
       # gene coords / eGene symbol / strand; otherwise start from an empty
       # list and rely on the CS-derived chrom + lead_pos alone.
-      locus_info <- if (has_master)
+      locus_info <- if (manual_mode) {
+                      list(chrom       = parsed_cs$chrom,
+                           gene_start  = NA_real_,
+                           gene_end    = NA_real_,
+                           gene_strand = NA_character_,
+                           gene_symbol = parsed_cs$eGene,
+                           lead_pos    = parsed_cs$lead_pos)
+                    } else if (has_master) {
                       get_module_locus_info(meta, mod_id,
                                             focal_cell = this_cell,
                                             focal_gene = this_gene,
                                             anno_col   = anno_col,
                                             gene_col   = opt$gene_col)
-                    else NULL
+                    } else NULL
       if (is.null(locus_info)) locus_info <- list()
       if (!is.na(cs_rows$lead_pos[p_idx])) {
         locus_info$lead_pos <- cs_rows$lead_pos[p_idx]
