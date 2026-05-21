@@ -185,3 +185,66 @@ get_module_betas <- function(df, mod_id, focal_gene, anno_col, join_col, gene_co
     select(all_of(anno_col), beta_val = final_beta, gene_sym_col, mod_id_col, snp_id, pval_exact) %>%
     rename(!!join_col := all_of(anno_col))
 }
+
+# build_cs_figure_title(): one patchwork title + subtitle for a credible-set
+# row (module, cell, gene on the title line; lead SNP and beta on subtitle),
+# matching Figure 5 panel-b style.
+#
+# Example:
+#   build_cs_figure_title("M_18448", "T_CD4_CM", "RBFA",
+#                         "chr18:80005273:C:T", 0.6)
+#   # -> list(title = "[M_18448] T_CD4_CM | RBFA",
+#   #         subtitle = "chr18:80005273:C:T | beta = 0.60")
+build_cs_figure_title <- function(mod_id, cell, gene_symbol, lead_snp, beta_val) {
+  sym <- if (!is.null(gene_symbol) && nzchar(as.character(gene_symbol)))
+            as.character(gene_symbol) else "Unknown_gene"
+  cell_s <- if (!is.null(cell) && !is.na(cell) && nzchar(as.character(cell)))
+              as.character(cell) else "Unknown_cell"
+  mod_s  <- if (!is.null(mod_id) && nzchar(as.character(mod_id)))
+              sprintf("[%s]", as.character(mod_id)) else ""
+  title <- trimws(sprintf("%s %s | %s", mod_s, cell_s, sym))
+  snp_s <- if (!is.null(lead_snp) && !is.na(lead_snp) && nzchar(as.character(lead_snp)))
+             as.character(lead_snp) else "Unknown_SNP"
+  beta_s <- if (!is.null(beta_val) && length(beta_val) == 1L &&
+                is.finite(suppressWarnings(as.numeric(beta_val))))
+              sprintf("beta = %.2f", as.numeric(beta_val)) else "beta = NA"
+  list(title = title, subtitle = sprintf("%s | %s", snp_s, beta_s))
+}
+
+# wrap_cs_grid_with_titles(): assemble module panels into rows and attach
+# one patchwork title + subtitle per row (Figure 5 panel-b layout).
+#
+# Example:
+#   wrap_cs_grid_with_titles(list(p_lz, p_umap, p_z), cols = 3L,
+#     col_widths = c(1.2, 1, 1),
+#     cs_row_titles = list(list(title = "[M] T | G", subtitle = "chr1:1:A:T | beta = 0.5")))
+#   # -> patchwork with one annotated row
+wrap_cs_grid_with_titles <- function(module_plots, cols, col_widths, cs_row_titles) {
+  n_plots <- length(module_plots)
+  if (n_plots == 0L) return(patchwork::plot_spacer())
+  cols <- as.integer(cols)
+  n_rows <- max(1L, n_plots %/% cols)
+  row_grids <- vector("list", n_rows)
+  ann_theme <- ggplot2::theme(
+    plot.title    = ggplot2::element_text(hjust = 0, face = "plain"),
+    plot.subtitle = ggplot2::element_text(hjust = 0, face = "plain")
+  )
+  for (r in seq_len(n_rows)) {
+    idx_start <- (r - 1L) * cols + 1L
+    idx_end   <- min(r * cols, n_plots)
+    parts <- module_plots[idx_start:idx_end]
+    while (length(parts) < cols)
+      parts <- c(parts, list(patchwork::plot_spacer()))
+    row_grids[[r]] <- patchwork::wrap_plots(parts, ncol = cols) +
+      patchwork::plot_layout(widths = col_widths)
+    if (length(cs_row_titles) >= r && !is.null(cs_row_titles[[r]])) {
+      ann <- cs_row_titles[[r]]
+      if (nzchar(ann$title)) {
+        row_grids[[r]] <- row_grids[[r]] +
+          patchwork::plot_annotation(title = ann$title, subtitle = ann$subtitle,
+                                   theme = ann_theme)
+      }
+    }
+  }
+  if (length(row_grids) == 1L) row_grids[[1L]] else patchwork::wrap_plots(row_grids, ncol = 1)
+}

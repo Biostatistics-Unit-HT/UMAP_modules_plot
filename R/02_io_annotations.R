@@ -19,16 +19,26 @@
 #   #    score=0.73
 load_annotation_file <- function(path) {
   if (!file.exists(path)) stop(sprintf("Annotation file not found: %s", path))
+  # Walk the file to (a) find the first real data line (non-blank, non-#),
+  # (b) count the number of leading '#' / blank lines we need to tell fread
+  # to skip. NOTE: data.table's `skip = "#"` is misleading -- it actually
+  # treats the first line starting with '#' as the COLUMN-NAMES line, so it
+  # is NOT a generic "skip comment lines" knob. We compute a numeric skip
+  # ourselves so the loader works for files with no '#' headers (Ensembl
+  # Regulatory Build) AND for files with one or more '#' header lines
+  # (GENCODE / generic GFF3).
   con <- file(path, "r"); on.exit(close(con), add = TRUE)
   first_data_line <- NULL
+  n_skip <- 0L
   while (length(line <- readLines(con, n = 1)) > 0) {
-    if (!grepl("^#", line) && nchar(line) > 0) { first_data_line <- line; break }
+    if (grepl("^#", line) || nchar(line) == 0L) { n_skip <- n_skip + 1L; next }
+    first_data_line <- line; break
   }
   if (is.null(first_data_line)) return(NULL)
   n_cols <- length(strsplit(first_data_line, "\t", fixed = TRUE)[[1]])
-  
+
   if (n_cols >= 9) {
-    raw <- fread(path, sep = "\t", header = FALSE, skip = "#",
+    raw <- fread(path, sep = "\t", header = FALSE, skip = n_skip,
                  col.names = c("chrom", "source", "feature_type", "start", "end",
                                "score", "strand", "frame", "attrs"),
                  select = 1:9, fill = TRUE)

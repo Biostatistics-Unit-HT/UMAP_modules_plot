@@ -57,6 +57,14 @@ option_list <- list(
   make_option("--umap", type = "character", default = NULL, help = "Path to UMAP TSV (optional). Omit to skip the Beta UMAP panel. Pair with --master to enable it."),
   make_option("--master", type = "character", default = NULL, help = "Path to Master Annotations TSV (optional). Used for per-(cell, gene) betas, gene-track symbol lookups and the module-level most-likely SNP."),
   make_option("--modules", type = "character", default = NULL, help = "Comma-separated Module IDs (optional). When omitted the script treats each --lz_files entry as one implicit module and uses the top -log10(P) SNP as the anchor."),
+  # Manual / single-CS mode: bypass --master and --modules by spelling out
+  # the credible-set string + a single focal beta. Useful when you only have
+  # an ad-hoc beta for one (cell, gene, snp) and don't want to materialise a
+  # master annotation TSV just to plot it.
+  make_option("--cs_name", type = "character", default = NULL,
+              help = "Manual credible-set identifier, e.g. 'chr22::study::NK_CD16_adaptive:ENSG00000015475::chr22:17604981:C:T::L1'. When set together with --beta_cs the script runs in MANUAL mode: --master and --modules are ignored (a notice is printed if they are also set) and the cell / gene / chromosome / lead SNP are parsed from this string. --cell, when provided, overrides the cell parsed from --cs_name."),
+  make_option("--beta_cs", type = "numeric", default = NA_real_,
+              help = "Beta value used to colour the focal cell type on the Beta UMAP when --cs_name is set (manual mode). The diverging colour scale is centred at 0 and its extent is |--beta_cs|."),
   
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
@@ -70,8 +78,9 @@ option_list <- list(
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
   # General Settings
-  make_option("--join_col", type = "character", default = "celltype_2", help = "Column name in UMAP for celltypes [default: %default]"),
+  make_option("--join_col", type = "character", default = "celltype_2", help = "Column name in UMAP for celltypes used for JOIN / FILTER logic: --cell matching, joining to --master, and identifying focal cells from --cs_name [default: %default]."),
   make_option("--anno_join_col", type = "character", default = NULL, help = "Column name in Master Annotations (if different from join_col)"),
+  make_option("--label_col", type = "character", default = NULL, help = "Column name in UMAP used ONLY for the cell-type LABELS drawn on the Beta / Reference UMAPs (centroid text). Defaults to --join_col. Set this to e.g. 'celltype_3' to label cells at a different granularity from the one used to join with --master / --cell. When --label_col differs from --join_col, only label-column groups that contain at least one focal cell (per --join_col) are labelled."),
   make_option("--gene_col", type = "character", default = "eGene_symbol", help = "Column name for gene symbol [default: %default]"),
   make_option("--gtf", type = "character", default = NULL, help = "Optional GENCODE GTF (e.g. gencode.v49.annotation.gtf) or a pre-built .coding_genes.tsv. When supplied, the LocusZoom gene track shows every protein-coding gene in the window."),
   make_option("--annotations", type = "character", default = NULL, help = "Optional comma-separated annotation file(s) to show in a zoom panel around the lead SNP. BED-style (chrom, start, end, feature_type [, score]) or full 9-col GFF. A numeric 5th column turns the lane into a continuous profile."),
@@ -134,9 +143,42 @@ has_z       <- has_nonempty_char(opt$z_files)
 has_lz      <- has_nonempty_char(opt$lz_files)
 has_ld      <- has_nonempty_char(opt$ld_files)
 
-# Beta UMAP needs both the UMAP coords and the master annotation.
-has_beta_panel <- has_umap && has_master
-if (has_umap && !has_master)
+# --- MANUAL MODE: --cs_name + --beta_cs ---
+# A single credible-set identifier (--cs_name) plus a single beta (--beta_cs)
+# lets you plot one (cell, gene, snp) without supplying --master or --modules.
+# Both flags must be set together. When active, parse_cs(--cs_name) provides
+# the focal cell, gene, chromosome and lead SNP; --beta_cs is the beta used
+# to colour the focal cell type on the Beta UMAP. --cell, if set, overrides
+# the parsed cell.
+cs_name_set <- has_nonempty_char(opt$cs_name)
+beta_cs_set <- !is.null(opt$beta_cs) && length(opt$beta_cs) == 1L &&
+               is.finite(suppressWarnings(as.numeric(opt$beta_cs)))
+if (cs_name_set != beta_cs_set)
+  stop("--cs_name and --beta_cs must be provided together (or neither).")
+manual_mode <- cs_name_set && beta_cs_set
+parsed_cs <- if (manual_mode) parse_cs(opt$cs_name) else NULL
+manual_label <- NA_character_
+if (manual_mode) {
+  toks     <- strsplit(opt$cs_name, "::", fixed = TRUE)[[1]]
+  last_tok <- if (length(toks) > 0L) tail(toks, 1L) else ""
+  manual_label <- if (length(last_tok) == 1L && grepl("^L\\d+$", last_tok)) last_tok
+                  else if (!is.na(parsed_cs$chrom) && !is.na(parsed_cs$lead_pos))
+                    sprintf("chr%s:%d", parsed_cs$chrom, as.integer(parsed_cs$lead_pos))
+                  else "manual_cs"
+  if (has_master)
+    cat("Note: --master is ignored in --cs_name manual mode.\n")
+  if (has_modules)
+    cat("Note: --modules is ignored in --cs_name manual mode.\n")
+  opt$master  <- NULL
+  opt$modules <- manual_label   # feeds the existing has_modules branch below
+  has_master  <- FALSE
+  has_modules <- TRUE
+}
+
+# Beta UMAP needs --umap; per-cell colour comes from --master OR (in manual
+# mode) from --beta_cs.
+has_beta_panel <- has_umap && (has_master || manual_mode)
+if (has_umap && !has_master && !manual_mode)
   cat("Note: --umap provided without --master; the Beta UMAP panel is skipped (master annotations hold the per-(cell, gene) betas).\n")
 if (has_master && !has_umap)
   cat("Note: --master provided without --umap; the Beta UMAP panel is skipped (no embedding to plot on).\n")
@@ -156,7 +198,7 @@ if (!lz_xlim_mode %in% c("context", "snp"))
 
 # Need at least something to plot.
 if (!has_lz && !has_beta_panel)
-  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules or every module from master when --lz_files is omitted).")
+  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules), or --umap + --cs_name + --beta_cs (manual single-CS mode).")
 
 beta_umap_all_cells <- isTRUE(opt$beta_umap_all_cells)
 
@@ -312,9 +354,26 @@ for (i in seq_len(n_items)) {
   # available, otherwise fall back to (cell, gene) in master). Each CS
   # produces one grid row of [LocusZoom | Beta UMAP | optional Coloc Z].
   lz_path  <- if (has_lz) lz_files[i] else NULL
-  cs_rows  <- module_cs_list(lz_path, meta, mod_id, anno_col,
-                             cell_filter = cell_filter,
-                             gene_filter = gene_filter)
+  if (manual_mode) {
+    # In manual mode we don't have a master annotation to enumerate
+    # (cell, gene) pairs from, so synthesise exactly one row from
+    # parse_cs(--cs_name). --cell (when provided) wins over the parsed cell.
+    pc <- parsed_cs
+    focal_cell_man <- if (!is.null(cell_filter) && length(cell_filter) > 0L)
+                       cell_filter[1] else pc$cell
+    cs_rows <- data.table::data.table(
+      cs           = opt$cs_name,
+      cell         = focal_cell_man,
+      eGene        = pc$eGene,
+      eGene_symbol = pc$eGene,  # no symbol lookup without master
+      chrom        = pc$chrom,
+      lead_pos     = pc$lead_pos
+    )
+  } else {
+    cs_rows  <- module_cs_list(lz_path, meta, mod_id, anno_col,
+                               cell_filter = cell_filter,
+                               gene_filter = gene_filter)
+  }
   if (nrow(cs_rows) == 0) {
     cat(sprintf("Warning: Module %s has no credible sets matching the filters - skipping.\n", mod_id))
     next
@@ -334,10 +393,11 @@ for (i in seq_len(n_items)) {
     }
   }
   
-  module_plots <- list()
-  lead_bag     <- numeric(0)   # lead SNP positions, for the merged box
-  cs_labels    <- character(0)
-  chr_for_mod  <- NA_character_
+  module_plots   <- list()
+  cs_row_titles  <- list()     # one title+subtitle per CS row (patchwork)
+  lead_bag       <- numeric(0) # lead SNP positions, for the merged box
+  cs_labels      <- character(0)
+  chr_for_mod    <- NA_character_
   n_cs_mod     <- nrow(cs_rows)  # total CSs kept, used to place the zoom
                                  # connector only under the last LocusZoom
   
@@ -354,7 +414,23 @@ for (i in seq_len(n_items)) {
   mod_master_snp_pos <- NA_real_
   mod_master_snp_lab <- NA_character_
   mod_master_snp_id  <- NA_character_   # "chr<N>:<pos>:<ref>:<alt>" for LD lookup
-  if (has_master) {
+  if (manual_mode) {
+    # Anchor SNP comes from the parsed --cs_name. Try to use the full
+    # chr:pos:ref:alt token (better LD lookup); fall back to chr:pos:N:N.
+    mod_master_snp_pos <- parsed_cs$lead_pos
+    pc_tok <- regmatches(opt$cs_name,
+                         regexpr("chr[0-9XYM]+:\\d+:[ACGTN]+:[ACGTN]+",
+                                 opt$cs_name, ignore.case = TRUE))
+    if (length(pc_tok) == 1L && nzchar(pc_tok)) {
+      mod_master_snp_lab <- pc_tok
+      mod_master_snp_id  <- pc_tok
+    } else if (!is.na(parsed_cs$chrom) && !is.na(parsed_cs$lead_pos)) {
+      mod_master_snp_lab <- sprintf("chr%s:%d", parsed_cs$chrom,
+                                    as.integer(parsed_cs$lead_pos))
+      mod_master_snp_id  <- sprintf("chr%s:%d:N:N", parsed_cs$chrom,
+                                    as.integer(parsed_cs$lead_pos))
+    }
+  } else if (has_master) {
     mrows <- meta %>% filter(module == mod_id)
     if ("cs_max_pip" %in% names(mrows))
       mrows <- mrows %>% arrange(desc(as.numeric(cs_max_pip)))
@@ -438,27 +514,26 @@ for (i in seq_len(n_items)) {
       if (length(m) == 1 && nzchar(m)) disp_snp <- m
     }
     if (is.na(disp_snp) || disp_snp == "") disp_snp <- "Unknown_SNP"
-    snp_str <- ""; pval_str <- ""
-    if (valid_b && valid_se) {
-      p_dis <- if (se_dis != 0) 2 * pnorm(-abs(b_dis / se_dis)) else NA
-      p_str <- if (!is.na(p_dis)) sprintf(" | P = %.2e", p_dis) else " | P = NA"
-      snp_str  <- sprintf("\n%s | %s", trt, disp_snp)
-      pval_str <- sprintf(" | Beta = %.3f%s", b_dis, p_str)
-    } else {
-      snp_str <- sprintf("\n%s", disp_snp)
-      pval_str <- ""
-    }
-    lz_title <- paste0("LocusZoom (merged credible sets) | ", opt$name,
-                       " | ", this_cell, " | ", this_sym,
-                       "\n[", mod_id, "]", snp_str, pval_str)
+    beta_disp_m <- if (manual_mode) suppressWarnings(as.numeric(opt$beta_cs))
+                   else if (valid_b) b_dis else NA_real_
+    cs_row_titles[[length(cs_row_titles) + 1L]] <-
+      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp_m)
+    lz_title <- "LocusZoom (merged credible sets)"
     
-    locus_info <- if (has_master)
+    locus_info <- if (manual_mode) {
+                    list(chrom       = parsed_cs$chrom,
+                         gene_start  = NA_real_,
+                         gene_end    = NA_real_,
+                         gene_strand = NA_character_,
+                         gene_symbol = parsed_cs$eGene,
+                         lead_pos    = parsed_cs$lead_pos)
+                  } else if (has_master) {
                     get_module_locus_info(meta, mod_id,
                                           focal_cell = this_cell,
                                           focal_gene = this_gene,
                                           anno_col   = anno_col,
                                           gene_col   = opt$gene_col)
-                  else NULL
+                  } else NULL
     if (is.null(locus_info)) locus_info <- list()
     if (!is.na(cs_rows$lead_pos[p1])) {
       locus_info$lead_pos <- cs_rows$lead_pos[p1]
@@ -539,11 +614,26 @@ for (i in seq_len(n_items)) {
     this_sym  <- cs_rows$eGene_symbol[p_idx]
     if (is.na(this_sym) || this_sym == "") this_sym <- this_gene
     
-    # Beta UMAP is only produced when both --umap and --master are set.
+    # Beta UMAP is produced when --umap is set together with either --master
+    # or the manual --cs_name + --beta_cs pair.
     plot_df <- NULL
     if (has_beta_panel) {
-      beta_tbl <- get_module_betas(meta, mod_id, focal_gene = this_gene,
-                                   anno_col, opt$join_col, opt$gene_col)
+      beta_tbl <- if (manual_mode) {
+        # One-row synthetic beta table: the focal cell (parsed from --cs_name
+        # or overridden by --cell) gets --beta_cs, everyone else stays NA
+        # (rendered grey by plot_beta() via na.value).
+        tibble::tibble(
+          !!opt$join_col := as.character(this_cell),
+          beta_val      = as.numeric(opt$beta_cs),
+          gene_sym_col  = as.character(this_sym),
+          mod_id_col    = as.character(mod_id),
+          snp_id        = NA_character_,
+          pval_exact    = NA_real_
+        )
+      } else {
+        get_module_betas(meta, mod_id, focal_gene = this_gene,
+                         anno_col, opt$join_col, opt$gene_col)
+      }
       if (is.null(beta_tbl)) {
         cat(sprintf("Warning: No beta rows for module %s, gene %s - skipping Beta UMAP for this CS.\n",
                     mod_id, this_gene))
@@ -564,13 +654,17 @@ for (i in seq_len(n_items)) {
           focal <- as.character(plot_df[[jc_beta]]) == as.character(this_cell)
           plot_df <- plot_df %>%
             mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
-            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            # Draw non-focal (NA -> grey) cells FIRST so they sit in the
+            # background; then focal cells in ascending |beta| so the most
+            # extreme blues/reds end up on top and remain visible instead of
+            # being painted over by the grey layer.
+            arrange(desc(!focal), abs(coalesce(beta_val, 0))) %>%
             select(-beta_num)
         } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
           focal <- as.character(plot_df[[jc_beta]]) %in% cell_filter
           plot_df <- plot_df %>%
             mutate(beta_val = if_else(focal, coalesce(beta_num, 0), NA_real_)) %>%
-            arrange(!focal, desc(abs(coalesce(beta_val, 0)))) %>%
+            arrange(desc(!focal), abs(coalesce(beta_val, 0))) %>%
             select(-beta_num)
         } else {
           plot_df <- plot_df %>%
@@ -599,30 +693,36 @@ for (i in seq_len(n_items)) {
         disp_snp <- snp_rsid else disp_snp <- snp_dis
     }
     if (is.na(disp_snp) || disp_snp == "") disp_snp <- "Unknown_SNP"
-    
-    snp_str <- ""; pval_str <- ""
-    if (valid_b && valid_se) {
-      p_dis <- if (se_dis != 0) 2 * pnorm(-abs(b_dis / se_dis)) else NA
-      p_str <- if (!is.na(p_dis)) sprintf(" | P = %.2e", p_dis) else " | P = NA"
-      snp_str  <- sprintf("\n%s | %s", trt, disp_snp)
-      pval_str <- sprintf(" | Beta = %.3f%s", b_dis, p_str)
-    } else {
-      snp_str <- sprintf("\n%s", disp_snp)
+
+    # Beta for the figure subtitle (focal cell / manual --beta_cs).
+    beta_disp <- NA_real_
+    if (manual_mode) {
+      beta_disp <- suppressWarnings(as.numeric(opt$beta_cs))
+    } else if (!is.null(plot_df) && "beta_val" %in% names(plot_df)) {
+      fb <- unique(stats::na.omit(plot_df$beta_val[!is.na(plot_df$beta_val)]))
+      if (length(fb) >= 1L) beta_disp <- as.numeric(fb[1])
     }
-    beta_title <- paste0(opt$name, " | ", this_cell, " | ", this_sym,
-                         "\n[", mod_id, "]", snp_str, pval_str)
-    
+    cs_row_titles[[length(cs_row_titles) + 1L]] <-
+      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp)
+
     if (has_lz) {
       # Build locus info. If the master annotation is available, use it for
       # gene coords / eGene symbol / strand; otherwise start from an empty
       # list and rely on the CS-derived chrom + lead_pos alone.
-      locus_info <- if (has_master)
+      locus_info <- if (manual_mode) {
+                      list(chrom       = parsed_cs$chrom,
+                           gene_start  = NA_real_,
+                           gene_end    = NA_real_,
+                           gene_strand = NA_character_,
+                           gene_symbol = parsed_cs$eGene,
+                           lead_pos    = parsed_cs$lead_pos)
+                    } else if (has_master) {
                       get_module_locus_info(meta, mod_id,
                                             focal_cell = this_cell,
                                             focal_gene = this_gene,
                                             anno_col   = anno_col,
                                             gene_col   = opt$gene_col)
-                    else NULL
+                    } else NULL
       if (is.null(locus_info)) locus_info <- list()
       if (!is.na(cs_rows$lead_pos[p_idx])) {
         locus_info$lead_pos <- cs_rows$lead_pos[p_idx]
@@ -636,8 +736,9 @@ for (i in seq_len(n_items)) {
           locus_info$chrom <- sub("^chr","", as.character(lz_peek$CHR[1]),
                                   ignore.case = TRUE)
       }
-      lz_title <- paste0("LocusZoom | ", opt$name, " | ", this_cell, " | ",
-                         this_sym, "\n[", mod_id, "]")
+      # Panel label only; module / cell / gene / SNP / beta live in the
+      # row-level plot_annotation (Figure 5 panel-b style).
+      lz_title <- "LocusZoom"
       
       # Region for the gene track: union of SNP extents (filtered) + eGene body.
       genes_region <- NULL
@@ -739,13 +840,20 @@ for (i in seq_len(n_items)) {
     if (has_beta_panel && !is.null(plot_df)) {
       pb_args <- list(
         plot_df,
-        beta_title,
+        NULL,
         opt$pt_size,
         opt$join_col,
         show_legend = TRUE,
         use_raster = use_raster,
         show_labels = show_labels
       )
+      # --label_col (when supported) lets the user label cells at a different
+      # granularity (e.g. celltype_3) than the join column used to colour /
+      # filter focal cells (e.g. celltype_2). Defaults to opt$join_col so
+      # behaviour is unchanged when the flag isn't set.
+      if ("label_col" %in% names(formals(plot_beta))) {
+        pb_args$label_col <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+      }
       if ("label_cells_only" %in% names(formals(plot_beta))) {
         pb_args$label_cells_only <- if (!is.na(this_cell) && nzchar(as.character(this_cell))) {
           as.character(this_cell)
@@ -762,10 +870,8 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {
-      z_title <- paste0("Coloc Z-Scores | ", this_cell, " | ", this_sym,
-                       "\n[", mod_id, "]")
       module_plots[[length(module_plots) + 1]] <- build_zscore_column(
-        z_tbl_mod, z_title, this_cs = this_cs)
+        z_tbl_mod, "Coloc Z-Scores", this_cs = this_cs)
     }
   }
   }
@@ -774,7 +880,21 @@ for (i in seq_len(n_items)) {
   
   n_cs_for_mod <- length(module_plots) %/% cols
   total_cs_rows <- total_cs_rows + n_cs_for_mod
-  cs_grid <- wrap_plots(module_plots, ncol = cols)
+  # Per-CS-row column widths: LocusZoom (when present) is rendered narrower
+  # than the other side panels (beta UMAP, Z-score) but with enough room for
+  # its multi-line title and gene track to lay out cleanly. The figure-wide
+  # plot_width below scales by sum(col_widths) so the other panels actually
+  # close the gap instead of leaving empty horizontal space (beta + z-score
+  # use coord_equal()/coord_fixed() and can't grow into the slack).
+  col_widths <- rep(1, cols)
+  if (has_lz) col_widths[1] <- 1.2
+  cs_grid <- wrap_cs_grid_with_titles(module_plots, cols, col_widths, cs_row_titles)
+  # Apply the global Helvetica / large / plain text styling NOW, before
+  # wrap_elements() makes cs_grid atomic. `& theme()` does NOT propagate
+  # through wrap_elements(), so the final `final_plot & big_helvetica_theme()`
+  # at the bottom never reaches the LZ / beta / Z panels -- only the merged
+  # annotation box and (when shown) the reference UMAP.
+  cs_grid <- cs_grid & big_helvetica_theme(base_size = 18)
   
   # Merged, full-width annotation box for the whole module.
   if (!is.null(annotations_tbl) && !is.null(annotation_tracks) &&
@@ -799,12 +919,35 @@ for (i in seq_len(n_items)) {
           lab <- as.character(mod_master_snp_id)
         lab
       })
-    # Heights: each CS row ~5 units, merged box ~2 units. Keeps the box
-    # readable without dominating the figure. Wrapping `cs_grid` with
-    # `wrap_elements()` keeps it atomic so `/` stacks two blocks rather
-    # than flattening the inner panels (which breaks when cols == 1).
+    # The merged annotation box was full-width before, which made it look
+    # disconnected from the LocusZoom even though they share the same
+    # genomic axis. Now we put it in a 1-row patchwork beside `plot_spacer()`
+    # blocks for the beta / Z columns and reuse the SAME col_widths, so the
+    # box visually anchors directly under the LocusZoom column.
+    #
+    # It also uses a slightly smaller base text size than the top panels
+    # since its column is narrower (text wraps better at ~14 pt).
+    merged_box <- merged_box + big_helvetica_theme(base_size = 14)
+    if (cols > 1L) {
+      merged_row_parts <- c(list(merged_box),
+                            replicate(cols - 1L, patchwork::plot_spacer(),
+                                      simplify = FALSE))
+      merged_row <- patchwork::wrap_plots(merged_row_parts, ncol = cols) +
+                    patchwork::plot_layout(widths = col_widths)
+    } else {
+      merged_row <- merged_box
+    }
+    # Heights: each CS row ~5 units, merged box ~1.5 units (lowered from 2
+    # so the top row keeps more vertical real-estate, since its panels are
+    # the larger / more information-dense ones). Wrapping `cs_grid` AND the
+    # merged row with `wrap_elements()` keeps each block atomic so `/` stacks
+    # them cleanly without flattening inner panels.
+    # merged_h bumped slightly (1.5 -> 2) so the y-axis track labels
+    # (promoter_flanking_region, open_chromatin_region, ...) don't end up
+    # stacked on top of each other now that the merged box is also
+    # narrower (LZ-column width only).
     merged_h <- 2
-    composite <- wrap_elements(cs_grid) / merged_box +
+    composite <- wrap_elements(cs_grid) / wrap_elements(merged_row) +
       plot_layout(heights = c(n_cs_for_mod * 5, merged_h))
     module_composites[[length(module_composites) + 1]] <- composite
     total_cs_rows <- total_cs_rows + (merged_h / 5)  # ~0.4 row-equivalents
@@ -822,18 +965,33 @@ grid_plot <- if (length(module_composites) == 1) {
              }
 n_rows <- max(1, total_cs_rows)
 
+# Effective per-row width is the sum of col_widths (the LZ slot is 0.5,
+# others are 1) -- not `cols` -- so when the LZ is halved the row shrinks
+# accordingly instead of leaving empty horizontal space.
+row_w <- sum(col_widths)
 if (show_ref) {
-  p_ref <- plot_ref(merged, paste(opt$name, "Reference"), opt$join_col, opt$pt_size, use_raster)
+  ref_label_col <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+  pr_args <- list(merged, paste(opt$name, "Reference"), opt$join_col,
+                  opt$pt_size, use_raster)
+  if ("label_col" %in% names(formals(plot_ref))) pr_args$label_col <- ref_label_col
+  p_ref <- do.call(plot_ref, pr_args)
   final_plot <- p_ref | grid_plot
-  final_plot <- final_plot + plot_layout(widths = c(1, cols))
-  plot_width <- (cols + 1) * 6
+  final_plot <- final_plot + plot_layout(widths = c(1, row_w))
+  plot_width <- (row_w + 1) * 6
 } else {
   final_plot <- grid_plot
-  plot_width <- cols * 6
+  plot_width <- row_w * 6
 }
 
-base_height <- 4.5
-plot_height <- max(base_height * n_rows, 5)
+# Bumped from 4.5 to 6 so the top row's panels (LZ, beta UMAP, Z-score) keep
+# enough vertical room after the new bigger Helvetica titles + bigger axis text.
+base_height <- 6
+plot_height <- max(base_height * n_rows, 6)
+
+# Helvetica / large / plain text on the outer patchwork. This reaches the
+# merged annotation box and (when present) the reference UMAP. The inner
+# LZ / beta / Z grid was already styled above before wrap_elements().
+final_plot <- final_plot & big_helvetica_theme(base_size = 18)
 
 # --- Save Logic ---
 out_base <- sub("\\.png$|\\.pdf$", "", opt$out, ignore.case = TRUE)
