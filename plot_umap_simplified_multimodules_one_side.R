@@ -393,10 +393,11 @@ for (i in seq_len(n_items)) {
     }
   }
   
-  module_plots <- list()
-  lead_bag     <- numeric(0)   # lead SNP positions, for the merged box
-  cs_labels    <- character(0)
-  chr_for_mod  <- NA_character_
+  module_plots   <- list()
+  cs_row_titles  <- list()     # one title+subtitle per CS row (patchwork)
+  lead_bag       <- numeric(0) # lead SNP positions, for the merged box
+  cs_labels      <- character(0)
+  chr_for_mod    <- NA_character_
   n_cs_mod     <- nrow(cs_rows)  # total CSs kept, used to place the zoom
                                  # connector only under the last LocusZoom
   
@@ -513,19 +514,11 @@ for (i in seq_len(n_items)) {
       if (length(m) == 1 && nzchar(m)) disp_snp <- m
     }
     if (is.na(disp_snp) || disp_snp == "") disp_snp <- "Unknown_SNP"
-    snp_str <- ""; pval_str <- ""
-    if (valid_b && valid_se) {
-      p_dis <- if (se_dis != 0) 2 * pnorm(-abs(b_dis / se_dis)) else NA
-      p_str <- if (!is.na(p_dis)) sprintf(" | P = %.2e", p_dis) else " | P = NA"
-      snp_str  <- sprintf("\n%s | %s", trt, disp_snp)
-      pval_str <- sprintf(" | Beta = %.3f%s", b_dis, p_str)
-    } else {
-      snp_str <- sprintf("\n%s", disp_snp)
-      pval_str <- ""
-    }
-    lz_title <- paste0("LocusZoom (merged credible sets)\n", opt$name,
-                       " | ", this_cell, " | ", this_sym,
-                       "\n[", mod_id, "]", snp_str, pval_str)
+    beta_disp_m <- if (manual_mode) suppressWarnings(as.numeric(opt$beta_cs))
+                   else if (valid_b) b_dis else NA_real_
+    cs_row_titles[[length(cs_row_titles) + 1L]] <-
+      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp_m)
+    lz_title <- "LocusZoom (merged credible sets)"
     
     locus_info <- if (manual_mode) {
                     list(chrom       = parsed_cs$chrom,
@@ -700,19 +693,18 @@ for (i in seq_len(n_items)) {
         disp_snp <- snp_rsid else disp_snp <- snp_dis
     }
     if (is.na(disp_snp) || disp_snp == "") disp_snp <- "Unknown_SNP"
-    
-    snp_str <- ""; pval_str <- ""
-    if (valid_b && valid_se) {
-      p_dis <- if (se_dis != 0) 2 * pnorm(-abs(b_dis / se_dis)) else NA
-      p_str <- if (!is.na(p_dis)) sprintf(" | P = %.2e", p_dis) else " | P = NA"
-      snp_str  <- sprintf("\n%s | %s", trt, disp_snp)
-      pval_str <- sprintf(" | Beta = %.3f%s", b_dis, p_str)
-    } else {
-      snp_str <- sprintf("\n%s", disp_snp)
+
+    # Beta for the figure subtitle (focal cell / manual --beta_cs).
+    beta_disp <- NA_real_
+    if (manual_mode) {
+      beta_disp <- suppressWarnings(as.numeric(opt$beta_cs))
+    } else if (!is.null(plot_df) && "beta_val" %in% names(plot_df)) {
+      fb <- unique(stats::na.omit(plot_df$beta_val[!is.na(plot_df$beta_val)]))
+      if (length(fb) >= 1L) beta_disp <- as.numeric(fb[1])
     }
-    beta_title <- paste0(opt$name, " | ", this_cell, " | ", this_sym,
-                         "\n[", mod_id, "]", snp_str, pval_str)
-    
+    cs_row_titles[[length(cs_row_titles) + 1L]] <-
+      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp)
+
     if (has_lz) {
       # Build locus info. If the master annotation is available, use it for
       # gene coords / eGene symbol / strand; otherwise start from an empty
@@ -744,11 +736,9 @@ for (i in seq_len(n_items)) {
           locus_info$chrom <- sub("^chr","", as.character(lz_peek$CHR[1]),
                                   ignore.case = TRUE)
       }
-      # Wrap onto 3 short lines so the title fits inside the narrower
-      # LocusZoom column at the new (bigger) Helvetica font size. The
-      # pipe-separated form on a single line overflowed past the panel.
-      lz_title <- paste0("LocusZoom | ", opt$name, "\n",
-                         this_cell, " | ", this_sym, "\n[", mod_id, "]")
+      # Panel label only; module / cell / gene / SNP / beta live in the
+      # row-level plot_annotation (Figure 5 panel-b style).
+      lz_title <- "LocusZoom"
       
       # Region for the gene track: union of SNP extents (filtered) + eGene body.
       genes_region <- NULL
@@ -850,7 +840,7 @@ for (i in seq_len(n_items)) {
     if (has_beta_panel && !is.null(plot_df)) {
       pb_args <- list(
         plot_df,
-        beta_title,
+        NULL,
         opt$pt_size,
         opt$join_col,
         show_legend = TRUE,
@@ -880,10 +870,8 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {
-      z_title <- paste0("Coloc Z-Scores\n", this_cell, " | ", this_sym,
-                       "\n[", mod_id, "]")
       module_plots[[length(module_plots) + 1]] <- build_zscore_column(
-        z_tbl_mod, z_title, this_cs = this_cs)
+        z_tbl_mod, "Coloc Z-Scores", this_cs = this_cs)
     }
   }
   }
@@ -900,8 +888,7 @@ for (i in seq_len(n_items)) {
   # use coord_equal()/coord_fixed() and can't grow into the slack).
   col_widths <- rep(1, cols)
   if (has_lz) col_widths[1] <- 1.2
-  cs_grid <- wrap_plots(module_plots, ncol = cols) +
-             patchwork::plot_layout(widths = col_widths)
+  cs_grid <- wrap_cs_grid_with_titles(module_plots, cols, col_widths, cs_row_titles)
   # Apply the global Helvetica / large / plain text styling NOW, before
   # wrap_elements() makes cs_grid atomic. `& theme()` does NOT propagate
   # through wrap_elements(), so the final `final_plot & big_helvetica_theme()`
