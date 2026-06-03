@@ -44,13 +44,40 @@ shorten_cs_label <- function(s, max_len = 56L) {
   if (nchar(tail) > max_len) paste0(substr(tail, 1, max_len - 3L), "...") else tail
 }
 
+# zscore_axis_limits(): symmetric limits for QTL-Z (x) and disease-Z (y).
+# When linked_axes is TRUE both axes share max(abs(all Z)); when FALSE each
+# axis uses only its own column (independent scale).
+#
+# Example:
+#   zscore_axis_limits(c(-3, 5), c(-1, 2), linked_axes = TRUE)
+#   # -> list(xlim = c(-5.5, 5.5), ylim = c(-5.5, 5.5))
+#   zscore_axis_limits(c(-3, 5), c(-1, 2), linked_axes = FALSE)
+#   # -> list(xlim = c(-5.5, 5.5), ylim = c(-2.2, 2.2))
+zscore_axis_limits <- function(x_vals, y_vals, linked_axes = TRUE, pad = 1.1) {
+  lim_from <- function(v) {
+    m <- max(abs(v), na.rm = TRUE)
+    if (!is.finite(m) || m <= 0) m <- 1
+    m * pad
+  }
+  if (isTRUE(linked_axes)) {
+    L <- lim_from(c(x_vals, y_vals))
+    list(xlim = c(-L, L), ylim = c(-L, L))
+  } else {
+    list(xlim = c(-lim_from(x_vals), lim_from(x_vals)),
+         ylim = c(-lim_from(y_vals), lim_from(y_vals)))
+  }
+}
+
 # plot_zscore_df(): scatter QTL Z vs disease Z from an in-memory table (uniform
 # blue points, no Z-based colour scale). Optional panel_cs_label becomes subtitle.
 #
 # Example:
 #   plot_zscore_df(data.frame(z_qtl = 1:3, z_disease = 3:1), "Z | cell | g\n[M]")
-#   # -> ggplot with diagonals and dashed zero lines.
-plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL) {
+#   # -> ggplot with diagonals and dashed zero lines (linked axes).
+#   plot_zscore_df(..., linked_axes = FALSE)
+#   # -> x and y limits from each column separately.
+plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL,
+                           linked_axes = TRUE) {
   if (is.null(df) || nrow(df) == 0L) return(plot_spacer())
   nms <- names(df)
   cols <- resolve_zscore_columns(nms)
@@ -60,17 +87,20 @@ plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL) 
     cat("Warning: Could not identify Z-score columns in supplied data.frame\n")
     return(plot_spacer())
   }
-  max_val   <- max(abs(c(df[[qtl_col]], df[[dis_col]])), na.rm = TRUE)
-  limit_val <- max_val * 1.1
-  if (!is.finite(limit_val) || limit_val <= 0) limit_val <- 1
+  lims <- zscore_axis_limits(df[[qtl_col]], df[[dis_col]], linked_axes = linked_axes)
   p <- ggplot(df, aes(x = .data[[qtl_col]], y = .data[[dis_col]])) +
     geom_hline(yintercept = 0, color = "black", linetype = "dashed", alpha = 0.5) +
     geom_vline(xintercept = 0, color = "black", linetype = "dashed", alpha = 0.5) +
     geom_abline(slope = 1, intercept = 0, color = "gray80", linetype = "dotted") +
     geom_abline(slope = -1, intercept = 0, color = "gray80", linetype = "dotted") +
     geom_point(fill = "#1E90FF", color = "white", shape = 21,
-               size = 3.5, alpha = 0.8, stroke = 0.3) +
-    coord_fixed(xlim = c(-limit_val, limit_val), ylim = c(-limit_val, limit_val)) +
+               size = 3.5, alpha = 0.8, stroke = 0.3)
+  p <- if (isTRUE(linked_axes)) {
+    p + coord_fixed(xlim = lims$xlim, ylim = lims$ylim)
+  } else {
+    p + coord_cartesian(xlim = lims$xlim, ylim = lims$ylim)
+  }
+  p <- p +
     theme_minimal() +
     labs(title = title, x = "QTL Z-Score", y = "Disease Z-Score") +
     theme(plot.title  = element_text(size = 10, face = "bold"),
@@ -99,13 +129,13 @@ plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL) 
 # Example:
 #   plot_zscore("icd10_j15_zscore_merge_notnull.csv", "Coloc Z-Scores\n[M_18448]")
 #   # -> ggplot with diagonals and dashed zero lines.
-plot_zscore <- function(z_file, title = "Coloc Z-Scores") {
+plot_zscore <- function(z_file, title = "Coloc Z-Scores", linked_axes = TRUE) {
   if (is.na(z_file) || z_file == "NA" || !file.exists(z_file)) {
     if (!is.na(z_file) && z_file != "NA") cat(sprintf("Warning: Z-score file not found at %s\n", z_file))
     return(plot_spacer())
   }
   df <- fread(z_file)
-  plot_zscore_df(df, title, panel_cs_label = NULL)
+  plot_zscore_df(df, title, panel_cs_label = NULL, linked_axes = linked_axes)
 }
 
 # build_zscore_column(): one or more Z panels from the module Z table — split by
@@ -116,27 +146,30 @@ plot_zscore <- function(z_file, title = "Coloc Z-Scores") {
 #   z <- data.table::fread(text = "snp,z_disease,cs_qtl,z_qtl\na,1,c1,2\nb,-1,c2,-2")
 #   build_zscore_column(z, "Coloc Z | cell | g\n[M]", this_cs = NA_character_)
 #   # -> patchwork column with two stacked scatters (c1 and c2).
-build_zscore_column <- function(z_tbl, title, this_cs = NA_character_) {
+build_zscore_column <- function(z_tbl, title, this_cs = NA_character_,
+                                linked_axes = TRUE) {
   if (is.null(z_tbl) || nrow(z_tbl) == 0L) return(plot_spacer())
-  if (!"cs_qtl" %in% names(z_tbl)) return(plot_zscore_df(z_tbl, title))
+  if (!"cs_qtl" %in% names(z_tbl)) return(plot_zscore_df(z_tbl, title, linked_axes = linked_axes))
   keys <- unique(stats::na.omit(as.character(z_tbl[["cs_qtl"]])))
   keys <- keys[nzchar(keys)]
-  if (length(keys) == 0L) return(plot_zscore_df(z_tbl, title))
+  if (length(keys) == 0L) return(plot_zscore_df(z_tbl, title, linked_axes = linked_axes))
   this_cs <- as.character(this_cs)
   matched <- (!is.na(this_cs) && length(this_cs) == 1L && nzchar(this_cs) &&
               this_cs %in% keys)
   if (matched) {
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == this_cs)
-    return(plot_zscore_df(sub, title, panel_cs_label = this_cs))
+    return(plot_zscore_df(sub, title, panel_cs_label = this_cs,
+                          linked_axes = linked_axes))
   }
   if (length(keys) == 1L) {
     k1 <- keys[[1]]
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == k1)
-    return(plot_zscore_df(sub, title, panel_cs_label = k1))
+    return(plot_zscore_df(sub, title, panel_cs_label = k1,
+                          linked_axes = linked_axes))
   }
   pieces <- lapply(keys, function(k) {
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == k)
-    plot_zscore_df(sub, title, panel_cs_label = k)
+    plot_zscore_df(sub, title, panel_cs_label = k, linked_axes = linked_axes)
   })
   wrap_plots(pieces, ncol = 1L) +
     patchwork::plot_layout(heights = rep(1, length(pieces)))

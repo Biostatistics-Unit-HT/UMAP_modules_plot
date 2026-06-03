@@ -69,6 +69,8 @@ option_list <- list(
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
   make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
+  make_option("--z_axes", type = "character", default = "linked",
+              help = "Coloc Z-score panel axis scaling: 'linked' (default) uses the same symmetric limits on QTL-Z and disease-Z from max(|Z|) over both columns with coord_fixed; 'independent' sets each axis from max(|Z|) in that column only (coord_cartesian)."),
   make_option("--lz_files", type = "character", default = NULL, help = "Optional comma-separated LocusZoom CSVs (use NA for missing) when you want LocusZoom panels. Omit when using --umap + --master + --modules: credible sets come from the master table only. Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables belong in --z_files."),
   make_option("--lz_layout", type = "character", default = "stacked",
               help = "LocusZoom layout: 'stacked' (one row per credible set) or 'merged' (single panel, all CS overlaid; LZ-only, no beta UMAP or Z). Merged adds a bottom strip (genomic span per CS, same Mb axis)."),
@@ -195,6 +197,11 @@ use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_beta_panel && !has_
 lz_xlim_mode <- tolower(trimws(as.character(opt$lz_xlim)))
 if (!lz_xlim_mode %in% c("context", "snp"))
   stop("--lz_xlim must be 'context' or 'snp'.")
+
+z_axes_mode <- tolower(trimws(as.character(opt$z_axes)))
+if (!z_axes_mode %in% c("linked", "independent"))
+  stop("--z_axes must be 'linked' or 'independent'.")
+z_linked_axes <- z_axes_mode == "linked"
 
 # Need at least something to plot.
 if (!has_lz && !has_beta_panel)
@@ -871,7 +878,8 @@ for (i in seq_len(n_items)) {
     }
     if (has_z) {
       module_plots[[length(module_plots) + 1]] <- build_zscore_column(
-        z_tbl_mod, "Coloc Z-Scores", this_cs = this_cs)
+        z_tbl_mod, "Coloc Z-Scores", this_cs = this_cs,
+        linked_axes = z_linked_axes)
     }
   }
   }
