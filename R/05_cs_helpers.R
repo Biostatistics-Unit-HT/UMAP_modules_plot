@@ -187,15 +187,20 @@ get_module_betas <- function(df, mod_id, focal_gene, anno_col, join_col, gene_co
 }
 
 # build_cs_figure_title(): one patchwork title + subtitle for a credible-set
-# row (module, cell, gene on the title line; lead SNP and beta on subtitle),
-# matching Figure 5 panel-b style.
+# row (module, cell, gene on the title line; lead SNP and beta/expression on
+# subtitle), matching Figure 5 panel-b style.
 #
 # Example:
 #   build_cs_figure_title("M_18448", "T_CD4_CM", "RBFA",
 #                         "chr18:80005273:C:T", 0.6)
 #   # -> list(title = "[M_18448] T_CD4_CM | RBFA",
 #   #         subtitle = "chr18:80005273:C:T | beta = 0.60")
-build_cs_figure_title <- function(mod_id, cell, gene_symbol, lead_snp, beta_val) {
+#   build_cs_figure_title("M_18448", "T_CD4_CM", "RBFA",
+#                         "chr18:80005273:C:T", NULL,
+#                         color_mode = "expression")
+#   # -> list(..., subtitle = "chr18:80005273:C:T | expression (RBFA)")
+build_cs_figure_title <- function(mod_id, cell, gene_symbol, lead_snp, beta_val,
+                                  color_mode = "beta") {
   sym <- if (!is.null(gene_symbol) && nzchar(as.character(gene_symbol)))
             as.character(gene_symbol) else "Unknown_gene"
   cell_s <- if (!is.null(cell) && !is.na(cell) && nzchar(as.character(cell)))
@@ -205,10 +210,16 @@ build_cs_figure_title <- function(mod_id, cell, gene_symbol, lead_snp, beta_val)
   title <- trimws(sprintf("%s %s | %s", mod_s, cell_s, sym))
   snp_s <- if (!is.null(lead_snp) && !is.na(lead_snp) && nzchar(as.character(lead_snp)))
              as.character(lead_snp) else "Unknown_SNP"
-  beta_s <- if (!is.null(beta_val) && length(beta_val) == 1L &&
-                is.finite(suppressWarnings(as.numeric(beta_val))))
-              sprintf("beta = %.2f", as.numeric(beta_val)) else "beta = NA"
-  list(title = title, subtitle = sprintf("%s | %s", snp_s, beta_s))
+  mode <- tolower(trimws(as.character(color_mode)))
+  detail_s <- if (mode == "expression") {
+    sprintf("expression (%s)", sym)
+  } else if (!is.null(beta_val) && length(beta_val) == 1L &&
+             is.finite(suppressWarnings(as.numeric(beta_val)))) {
+    sprintf("beta = %.2f", as.numeric(beta_val))
+  } else {
+    "beta = NA"
+  }
+  list(title = title, subtitle = sprintf("%s | %s", snp_s, detail_s))
 }
 
 # wrap_cs_grid_with_titles(): assemble module panels into rows and attach

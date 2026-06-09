@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # Single-population UMAP / optional LocusZoom / optional Coloc-Z-score plot.
-# Per credible set the grid row is: [optional LocusZoom] -> Beta UMAP (optional) -> [optional Coloc Z].
+# Per credible set the grid row is: [optional LocusZoom] -> UMAP (beta or expression) -> [optional Coloc Z].
 
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -54,7 +54,15 @@ option_list <- list(
               help = "When --umap_sample_n is not set: subsample the UMAP to this many rows only if the input has more rows than this value [default: %default]"),
   make_option("--umap_sample_n", type = "integer", default = -1L,
               help = "If >= 1, randomly subsample UMAP rows to at most this many cells (set.seed 42) for smaller PDFs, even when total rows is below --max_cells. Use -1 to rely on --max_cells only [default: %default]"),
-  make_option("--umap", type = "character", default = NULL, help = "Path to UMAP TSV (optional). Omit to skip the Beta UMAP panel. Pair with --master to enable it."),
+  make_option("--umap", type = "character", default = NULL, help = "Path to UMAP TSV/CSV (optional). Narrow table: coords + cell type (--umap_color_mode beta, needs --master). Wide table: coords + cell type + one gene expression column (--umap_color_mode expression)."),
+  make_option("--umap_color_mode", type = "character", default = "beta",
+              help = "Middle UMAP panel colouring: 'beta' (per-cell-type QTL beta from --master, default) or 'expression' (per-cell values from a gene column in --umap) [default: %default]"),
+  make_option("--log1p", action = "store_true", default = FALSE,
+              help = "Apply log1p to expression before colouring (expression mode only)."),
+  make_option("--clip_quantile", type = "double", default = 0.99,
+              help = "Clip expression colour scale at this upper quantile of non-zero cells; set to 1 to disable (expression mode) [default: %default]"),
+  make_option("--expr_palette", type = "character", default = "yellowred",
+              help = "Expression colour ramp: yellowred | brightyellowred | viridis | magma | inferno | plasma | turbo | cividis [default: %default]"),
   make_option("--master", type = "character", default = NULL, help = "Path to Master Annotations TSV (optional). Used for per-(cell, gene) betas, gene-track symbol lookups and the module-level most-likely SNP."),
   make_option("--modules", type = "character", default = NULL, help = "Comma-separated Module IDs (optional). When omitted the script treats each --lz_files entry as one implicit module and uses the top -log10(P) SNP as the anchor."),
   # Manual / single-CS mode: bypass --master and --modules by spelling out
@@ -177,22 +185,32 @@ if (manual_mode) {
   has_modules <- TRUE
 }
 
-# Beta UMAP needs --umap; per-cell colour comes from --master OR (in manual
-# mode) from --beta_cs.
-has_beta_panel <- has_umap && (has_master || manual_mode)
-if (has_umap && !has_master && !manual_mode)
+umap_color_mode <- tolower(trimws(as.character(opt$umap_color_mode)))
+if (!umap_color_mode %in% c("beta", "expression"))
+  stop("--umap_color_mode must be 'beta' or 'expression'.")
+
+# Beta UMAP needs --umap + (--master or manual --cs_name/--beta_cs).
+# Expression UMAP needs --umap only; per-cell values come from a gene column
+# in the UMAP file (matched to each CS row's eGene).
+has_expr_panel  <- has_umap && umap_color_mode == "expression"
+has_beta_panel  <- has_umap && umap_color_mode == "beta" && (has_master || manual_mode)
+has_umap_panel  <- has_expr_panel || has_beta_panel
+
+if (has_umap && umap_color_mode == "beta" && !has_master && !manual_mode)
   cat("Note: --umap provided without --master; the Beta UMAP panel is skipped (master annotations hold the per-(cell, gene) betas).\n")
+if (has_umap && umap_color_mode == "expression")
+  cat("Note: --umap_color_mode expression; per-cell expression is read from the --umap file (not --master).\n")
 if (has_master && !has_umap)
-  cat("Note: --master provided without --umap; the Beta UMAP panel is skipped (no embedding to plot on).\n")
+  cat("Note: --master provided without --umap; the UMAP panel is skipped (no embedding to plot on).\n")
 
 lz_layout_val <- tolower(trimws(opt$lz_layout))
 if (!lz_layout_val %in% c("stacked", "merged"))
   stop("--lz_layout must be 'stacked' or 'merged'.")
-if (lz_layout_val == "merged" && (has_beta_panel || has_z)) {
-  cat("Warning: --lz_layout merged applies only to LocusZoom-only runs (no beta UMAP, no --z_files); using stacked.\n")
+if (lz_layout_val == "merged" && (has_umap_panel || has_z)) {
+  cat("Warning: --lz_layout merged applies only to LocusZoom-only runs (no UMAP panel, no --z_files); using stacked.\n")
   lz_layout_val <- "stacked"
 }
-use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_beta_panel && !has_z
+use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_umap_panel && !has_z
 
 lz_xlim_mode <- tolower(trimws(as.character(opt$lz_xlim)))
 if (!lz_xlim_mode %in% c("context", "snp"))
@@ -204,8 +222,8 @@ if (!z_axes_mode %in% c("linked", "independent"))
 z_linked_axes <- z_axes_mode == "linked"
 
 # Need at least something to plot.
-if (!has_lz && !has_beta_panel)
-  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules), or --umap + --cs_name + --beta_cs (manual single-CS mode).")
+if (!has_lz && !has_umap_panel)
+  stop("Nothing to plot: provide --lz_files (LocusZoom only), or --umap + --master (with --modules, beta mode), or --umap + --cs_name + --beta_cs (manual beta mode), or --umap + --lz_files/--master (expression mode).")
 
 beta_umap_all_cells <- isTRUE(opt$beta_umap_all_cells)
 
@@ -313,10 +331,10 @@ if (has_umap) {
 # meta already loaded when has_master (see module list above).
 module_composites <- list()  # one patchwork per module (CS grid + merged box)
 total_cs_rows     <- 0L
-# Column layout: LZ, optional Beta UMAP, optional Coloc Z.
-cols <- as.integer(has_lz) + as.integer(has_beta_panel) + as.integer(has_z)
+# Column layout: LZ, optional UMAP (beta or expression), optional Coloc Z.
+cols <- as.integer(has_lz) + as.integer(has_umap_panel) + as.integer(has_z)
 if (cols == 0)
-  stop("Nothing to plot (no LZ, no Beta panel, no Z).")
+  stop("Nothing to plot (no LZ, no UMAP panel, no Z).")
 
 for (i in seq_len(n_items)) {
   mod_id <- mods[i]
@@ -621,10 +639,22 @@ for (i in seq_len(n_items)) {
     this_sym  <- cs_rows$eGene_symbol[p_idx]
     if (is.na(this_sym) || this_sym == "") this_sym <- this_gene
     
-    # Beta UMAP is produced when --umap is set together with either --master
-    # or the manual --cs_name + --beta_cs pair.
+    # UMAP middle panel: beta (from --master) or expression (from --umap file).
     plot_df <- NULL
-    if (has_beta_panel) {
+    expr_gene_col <- NULL
+    if (has_expr_panel) {
+      meta_cols <- expr_meta_columns(
+        opt$join_col,
+        if (has_nonempty_char(opt$label_col)) opt$label_col else NULL)
+      tryCatch({
+        expr_gene_col <- resolve_expr_gene_column(
+          names(merged), this_gene, meta_cols, gene_symbol = this_sym)
+        plot_df <- merged
+      }, error = function(e) {
+        cat(sprintf("Warning: Module %s, gene %s - %s\n",
+                    mod_id, this_gene, conditionMessage(e)))
+      })
+    } else if (has_beta_panel) {
       beta_tbl <- if (manual_mode) {
         # One-row synthetic beta table: the focal cell (parsed from --cs_name
         # or overridden by --cell) gets --beta_cs, everyone else stays NA
@@ -710,7 +740,8 @@ for (i in seq_len(n_items)) {
       if (length(fb) >= 1L) beta_disp <- as.numeric(fb[1])
     }
     cs_row_titles[[length(cs_row_titles) + 1L]] <-
-      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp)
+      build_cs_figure_title(mod_id, this_cell, this_sym, disp_snp, beta_disp,
+                            color_mode = umap_color_mode)
 
     if (has_lz) {
       # Build locus info. If the master annotation is available, use it for
@@ -844,7 +875,34 @@ for (i in seq_len(n_items)) {
         chr_for_mod <- sub("^chr", "", locus_info$chrom, ignore.case = TRUE)
       }
     }
-    if (has_beta_panel && !is.null(plot_df)) {
+    label_cells_arg <- if (!is.na(this_cell) && nzchar(as.character(this_cell))) {
+      as.character(this_cell)
+    } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
+      cell_filter
+    } else {
+      NULL
+    }
+    label_col_arg <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+
+    if (has_expr_panel && !is.null(plot_df) && !is.null(expr_gene_col)) {
+      pe_args <- list(
+        plot_df,
+        expr_gene_col,
+        opt$pt_size,
+        opt$join_col,
+        show_legend = TRUE,
+        use_raster = use_raster,
+        show_labels = show_labels,
+        label_cells_only = label_cells_arg,
+        label_col = label_col_arg,
+        log1p = isTRUE(opt$log1p),
+        clip_q = opt$clip_quantile,
+        palette = opt$expr_palette
+      )
+      module_plots[[length(module_plots) + 1]] <- do.call(plot_expression, pe_args)
+    } else if (has_expr_panel) {
+      module_plots[[length(module_plots) + 1]] <- plot_spacer()
+    } else if (has_beta_panel && !is.null(plot_df)) {
       pb_args <- list(
         plot_df,
         NULL,
@@ -854,26 +912,14 @@ for (i in seq_len(n_items)) {
         use_raster = use_raster,
         show_labels = show_labels
       )
-      # --label_col (when supported) lets the user label cells at a different
-      # granularity (e.g. celltype_3) than the join column used to colour /
-      # filter focal cells (e.g. celltype_2). Defaults to opt$join_col so
-      # behaviour is unchanged when the flag isn't set.
       if ("label_col" %in% names(formals(plot_beta))) {
-        pb_args$label_col <- if (has_nonempty_char(opt$label_col)) opt$label_col else opt$join_col
+        pb_args$label_col <- label_col_arg
       }
       if ("label_cells_only" %in% names(formals(plot_beta))) {
-        pb_args$label_cells_only <- if (!is.na(this_cell) && nzchar(as.character(this_cell))) {
-          as.character(this_cell)
-        } else if (!is.null(cell_filter) && length(cell_filter) > 0) {
-          cell_filter
-        } else {
-          NULL
-        }
+        pb_args$label_cells_only <- label_cells_arg
       }
       module_plots[[length(module_plots) + 1]] <- do.call(plot_beta, pb_args)
     } else if (has_beta_panel) {
-      # Column must stay aligned -- insert a blank placeholder when this
-      # CS had no master-derived beta rows.
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {

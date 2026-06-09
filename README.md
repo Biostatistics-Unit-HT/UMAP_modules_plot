@@ -3,14 +3,14 @@
 R script that builds **UMAP figures** with beta-colored panels for one or two populations side-by-side, supporting multiple modules in a single run. Gene names, SNP IDs, and p-values are extracted automatically from master annotation files. Output is **PDF** (default) or **PNG**, with **rasterization** of points enabled by default for large cell counts.
 
 ```
-[ LocusZoom ]   →   [ Beta UMAP ]   →   [ Coloc Z‑scores ]
+[ LocusZoom ]   →   [ UMAP (beta or expression) ]   →   [ Coloc Z‑scores ]
 ```
 
 - **LocusZoom** – `-log10(P)` vs genomic position, with
   - the **module-level most-likely SNP** (from the master table, or the top `-log10(P)` SNP when no module is provided) highlighted as a purple diamond; the same SNP anchors the LD r² colouring;
   - LD r² bins (`<0.2` navy, `0.2-0.4` light blue, `0.4-0.6` green, `0.6-0.8` orange, `≥0.8` red, `NA` gray) drawn as classic LocusZoom colours with bin-dependent point sizes so high-LD points stand out;
   - the bottom-most LZ row of a module emits a zoom‑out connector strip that fans toward the merged annotation box below.
-- **Beta UMAP** – the population's UMAP coloured by the per-cell-type effect size for the current (cell, gene). Only drawn when **both** `--umap` and `--master` are provided.
+- **UMAP middle panel** – `--umap_color_mode beta` (default): per-cell-type QTL beta from `--master`. `--umap_color_mode expression`: per-cell expression from a gene column in `--umap` (shared code with `plot_gene_umaps.R`).
 - **Coloc Z-scores** – QTL‑Z vs disease‑Z scatter for the colocalised credible sets.
 - **Merged annotation box** (once per module, spans the full grid width)
   – regulatory tracks overlapping the module’s window, with a dotted
@@ -66,6 +66,10 @@ This generate the files UMAP_lz_values.csv and UMAP_lz_values.raw
 | `--colors` | *(none)* | Path to palette TSV. **Required only when `--show_ref` is used.** |
 | `--name_1` | `Pop1` | Display name for Pop 1 shown in panel titles. |
 | `--join_col` | `cell` | Column name in the UMAP file used to identify cell types. |
+| `--umap_color_mode` | `beta` | Middle UMAP colouring: `beta` or `expression`. |
+| `--log1p` | off | log1p transform before expression colouring. |
+| `--clip_quantile` | `0.99` | Upper quantile clip for non-zero expression cells. |
+| `--expr_palette` | `yellowred` | Expression colour ramp. |
 | `--anno_join_col` | *(same as `--join_col`)* | Column name in the Master Annotations file if it differs from `--join_col`. |
 | `--gene_col` | `eGene_symbol` | Column name for the gene symbol in the Master Annotations file. |
 | `--out` | `umap_plot` | Output filename **prefix** (extension is added automatically). |
