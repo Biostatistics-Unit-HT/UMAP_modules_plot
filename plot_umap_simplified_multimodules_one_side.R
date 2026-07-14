@@ -88,7 +88,7 @@ option_list <- list(
   make_option("--name", type = "character", default = "Pop", help = "Display name used in panel titles"),
   
   # General Settings
-  make_option("--join_col", type = "character", default = "celltype_2", help = "Column name in UMAP for celltypes used for JOIN / FILTER logic: --cell matching, joining to --master, and identifying focal cells from --cs_name [default: %default]."),
+  make_option("--join_col", type = "character", default = "celltype_3", help = "Column name in UMAP for celltypes used for JOIN / FILTER logic: --cell matching, joining to --master, and identifying focal cells from --cs_name [default: %default]."),
   make_option("--anno_join_col", type = "character", default = NULL, help = "Column name in Master Annotations (if different from join_col)"),
   make_option("--label_col", type = "character", default = NULL, help = "Column name in UMAP used ONLY for the cell-type LABELS drawn on the Beta / Reference UMAPs (centroid text). Defaults to --join_col. Set this to e.g. 'celltype_3' to label cells at a different granularity from the one used to join with --master / --cell. When --label_col differs from --join_col, only label-column groups that contain at least one focal cell (per --join_col) are labelled."),
   make_option("--gene_col", type = "character", default = "eGene_symbol", help = "Column name for gene symbol [default: %default]"),
