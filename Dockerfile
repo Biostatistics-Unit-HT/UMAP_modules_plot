@@ -1,4 +1,4 @@
-# UMAP / LocusZoom / Z-score toolkit: R plotting + Python extract_z_lz.py
+# UMAP / LocusZoom / Coloc-beta toolkit: R plotting + Python extract_z_lz.py
 #
 # Build (use amd64 if you are on Apple Silicon and need x86_64 plink2):
 #   docker build --platform linux/amd64 -t umap-lz-plot .

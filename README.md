@@ -3,7 +3,7 @@
 R script that builds **UMAP figures** with beta-colored panels for one or two populations side-by-side, supporting multiple modules in a single run. Gene names, SNP IDs, and p-values are extracted automatically from master annotation files. Output is **PDF** (default) or **PNG**, with **rasterization** of points enabled by default for large cell counts.
 
 ```
-[ LocusZoom ]   →   [ UMAP (beta or expression) ]   →   [ Coloc Z‑scores ]
+[ LocusZoom ]   →   [ UMAP (beta or expression) ]   →   [ Coloc betas ]
 ```
 
 - **LocusZoom** – `-log10(P)` vs genomic position, with
@@ -11,7 +11,7 @@ R script that builds **UMAP figures** with beta-colored panels for one or two po
   - LD r² bins (`<0.2` navy, `0.2-0.4` light blue, `0.4-0.6` green, `0.6-0.8` orange, `≥0.8` red, `NA` gray) drawn as classic LocusZoom colours with bin-dependent point sizes so high-LD points stand out;
   - the bottom-most LZ row of a module emits a zoom‑out connector strip that fans toward the merged annotation box below.
 - **UMAP middle panel** – `--umap_color_mode beta` (default): per-cell-type QTL beta from `--master`. `--umap_color_mode expression`: per-cell expression from a gene column in `--umap` (shared code with `plot_gene_umaps.R`).
-- **Coloc Z-scores** – QTL‑Z vs disease‑Z scatter for the colocalised credible sets.
+- **Coloc betas** – QTL‑beta vs disease‑beta scatter for the colocalised credible sets.
 - **Merged annotation box** (once per module, spans the full grid width)
   – regulatory tracks overlapping the module’s window, with a dotted
   orange line at the module-level most-likely SNP.
@@ -146,26 +146,26 @@ Each beta panel title is composed as:
 
 ## Optional side panels
 
-### 4. `--z_files` – Coloc Z‑score CSVs  *(enables the coloc panel)*
+### 4. `--beta_files` – Coloc beta CSVs  *(enables the coloc panel)*
 
-Fully optional. If you do not pass `--z_files`, the Coloc Z‑scores column is not drawn at all (there is no empty slot in the layout).
+Fully optional. If you do not pass `--beta_files`, the Coloc betas column is not drawn at all (there is no empty slot in the layout). `--z_files` is accepted as a deprecated alias.
 
-When supplied, pass a comma‑separated list, **same length and order as `--modules`**, one CSV per module. Use the literal string `NA` for a module that has no Z‑score file.
+When supplied, pass a comma‑separated list, **same length and order as `--modules`**, one CSV per module. Use the literal string `NA` for a module that has no beta file.
 
-Expected columns (auto‑detected, case‑insensitive):
+Expected columns (auto‑detected, case‑insensitive; legacy `z_qtl` / `z_disease` / `z_icd10` still accepted):
 
-| column   | description                     |
-|----------|---------------------------------|
-| `snp`    | SNP identifier                  |
-| `z_qtl`  | QTL Z‑score                     |
-| `z_icd10` *or* `z_dis` | disease Z‑score    |
+| column         | description                     |
+|----------------|---------------------------------|
+| `snp`          | SNP identifier                  |
+| `beta_qtl`     | QTL beta (effect size)          |
+| `beta_disease` | disease beta (effect size)      |
 
 Example:
 
 ```csv
-snp,z_icd10,z_qtl
-chr18:79925373:C:T,4.26,-3.22
-chr18:79925702:A:G,-4.19, 3.30
+snp,beta_disease,beta_qtl
+chr18:79925373:C:T,0.12,-0.08
+chr18:79925702:A:G,-0.11, 0.09
 ```
 
 ### 5. `--lz_files` – LocusZoom P‑value CSVs  *(enables the LocusZoom panel)*
@@ -305,7 +305,7 @@ Rscript plot_umap_simplified_multimodules.R \
 ## Output layout
 
 - One row of the grid per **(module, cell, gene)** triple (after any `--cell` / `--gene` filter).
-- Number of columns per row is `1 + has(z_files) + has(lz_files)` (1–3 columns). Columns you don't supply are not drawn at all (no empty slots left behind).
+- Number of columns per row is `1 + has(beta_files) + has(lz_files)` (1–3 columns). Columns you don't supply are not drawn at all (no empty slots left behind).
 - Each LocusZoom cell is itself a stack of sub‑panels:
   1. `-log10(P)` scatter with the highlighted lead SNP,
   2. zoom annotation panel (only if `--annotations` is supplied). Discrete tracks draw solid blocks; continuous tracks (BED with a numeric 5th column) draw score‑scaled bars.
@@ -325,7 +325,7 @@ The beta panel uses a diverging **blue → white → yellow/orange/red** gradien
 
 ## Generating the inputs with `extract_z_lz.py` (optional)
 
-The R script consumes ready-made `--lz_files`, `--ld_files`, and (optionally) `--z_files` CSVs. The companion Python script `extract_z_lz.py` pulls those tables straight out of an anndata / TileDB QTL store so you don't have to wire them up by hand. It is entirely optional — you can feed the R script anything with the expected columns.
+The R script consumes ready-made `--lz_files`, `--ld_files`, and (optionally) `--beta_files` CSVs. The companion Python script `extract_z_lz.py` pulls those tables straight out of an anndata / TileDB QTL store so you don't have to wire them up by hand. It is entirely optional — you can feed the R script anything with the expected columns.
 
 ### What it produces
 
@@ -335,7 +335,7 @@ Given one QTL module, the script writes:
 |------------------------|------------------------------------------------------------------|-----------------------|
 | `<out>.csv`            | headerless `CS, CHR, CELL, GENE, POS, P` rows (the LZ format)    | `--lz_files`          |
 | `<out>.raw`            | plink2 `--export A include-alt` genotype dosages for every SNP  | `--ld_files`          |
-| `<out>_zscores.csv`    | `snp, z_disease, z_qtl` coloc table (only if `--dis_adata` set) | `--z_files`           |
+| `<out>_betas.csv`      | `snp, beta_disease, beta_qtl` coloc table (only if `--dis_adata`/`--dis_gz` set) | `--beta_files`        |
 
 One call emits one set of files per module; the R script then accepts a comma-separated list of these (one per module) in the corresponding CLI flags.
 
@@ -347,7 +347,7 @@ One call emits one set of files per module; the R script then accepts a comma-se
 | `--qtl_cs_adata`     | H5AD with per-CS SNP tables (`.var` has `chr`, `pos`; `.obs` has `chr`, `start`, `end`) |
 | `--tiledb`           | TileDB array with raw QTL P-values (queried by `(chr, cell, gene, start:end)`) |
 | `--qtl_module`       | Module id to extract (e.g. `M_18448`, `M_3934`)                   |
-| `--dis_adata`        | *(optional)* H5AD with disease fine-mapping, triggers the Z-score CSV |
+| `--dis_adata`        | *(optional)* H5AD with disease fine-mapping, triggers the beta CSV |
 | `--dis_cs`           | *(optional)* disease CS name to align against the QTL            |
 | `--safeld`           | Path where a pgen file for ld are stored |
 | `--out`              | output prefix (no extension)                                      |
@@ -366,14 +366,14 @@ python extract_z_lz.py \
 ```
 
 This writes `UMAP_lz_values.csv`, `UMAP_lz_values.raw`, and
-`UMAP_lz_values_zscores.csv` that you can then feed straight into:
+`UMAP_lz_values_betas.csv` that you can then feed straight into:
 
 ```bash
 Rscript plot_umap_simplified_multimodules_one_side.R \
-  --lz_files UMAP_lz_values.csv \
-  --ld_files UMAP_lz_values.raw \
-  --z_files  UMAP_lz_values_zscores.csv \
-  --out      umap_M18448.pdf --raster
+  --lz_files    UMAP_lz_values.csv \
+  --ld_files    UMAP_lz_values.raw \
+  --beta_files  UMAP_lz_values_betas.csv \
+  --out         umap_M18448.pdf --raster
 ```
 
 ### Python dependencies

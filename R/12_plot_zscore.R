@@ -1,26 +1,31 @@
-# QTL Z vs disease Z scatter for a single (module, CS).
+# QTL beta vs disease beta scatter for a single (module, CS).
 
-# resolve_zscore_columns(): map data.frame column names to QTL-Z and disease-Z
-# fields; avoids treating cs_qtl as a QTL Z column.
+# resolve_beta_columns(): map data.frame column names to QTL-beta and disease-beta
+# fields; avoids treating cs_qtl as a QTL beta column. Legacy z_qtl / z_disease
+# columns are still accepted so old CSVs keep working.
 #
 # Example:
-#   resolve_zscore_columns(c("snp", "z_disease", "cs_qtl", "z_qtl"))
-#   # -> list(qtl_col = "z_qtl", dis_col = "z_disease")
-resolve_zscore_columns <- function(nms) {
-  qtl_col <- if ("z_qtl" %in% nms) {
+#   resolve_beta_columns(c("snp", "beta_disease", "cs_qtl", "beta_qtl"))
+#   # -> list(qtl_col = "beta_qtl", dis_col = "beta_disease")
+resolve_beta_columns <- function(nms) {
+  qtl_col <- if ("beta_qtl" %in% nms) {
+    "beta_qtl"
+  } else if ("z_qtl" %in% nms) {
     "z_qtl"
   } else {
-    hit <- nms[grepl("z_qtl", nms, ignore.case = TRUE)][1]
+    hit <- nms[grepl("beta_qtl|z_qtl", nms, ignore.case = TRUE)][1]
     if (!is.na(hit) && nzchar(hit)) hit else {
       qhit <- nms[grepl("qtl", nms, ignore.case = TRUE) &
                   !nms %in% c("cs_qtl") & !grepl("^cs_", nms, ignore.case = TRUE)][1]
       if (!is.na(qhit) && nzchar(qhit)) qhit else NA_character_
     }
   }
-  dis_col <- if ("z_disease" %in% nms) {
+  dis_col <- if ("beta_disease" %in% nms) {
+    "beta_disease"
+  } else if ("z_disease" %in% nms) {
     "z_disease"
   } else {
-    hit <- nms[grepl("z_icd10|z_dis", nms, ignore.case = TRUE)][1]
+    hit <- nms[grepl("beta_dis|z_icd10|z_dis", nms, ignore.case = TRUE)][1]
     if (!is.na(hit) && nzchar(hit)) hit else {
       skip <- unique(c("snp", qtl_col, "cs_qtl", nms[grepl("^cs_", nms, ignore.case = TRUE)]))
       skip <- skip[!is.na(skip)]
@@ -44,16 +49,16 @@ shorten_cs_label <- function(s, max_len = 56L) {
   if (nchar(tail) > max_len) paste0(substr(tail, 1, max_len - 3L), "...") else tail
 }
 
-# zscore_axis_limits(): symmetric limits for QTL-Z (x) and disease-Z (y).
-# When linked_axes is TRUE both axes share max(abs(all Z)); when FALSE each
+# beta_axis_limits(): symmetric limits for QTL-beta (x) and disease-beta (y).
+# When linked_axes is TRUE both axes share max(abs(all beta)); when FALSE each
 # axis uses only its own column (independent scale).
 #
 # Example:
-#   zscore_axis_limits(c(-3, 5), c(-1, 2), linked_axes = TRUE)
+#   beta_axis_limits(c(-3, 5), c(-1, 2), linked_axes = TRUE)
 #   # -> list(xlim = c(-5.5, 5.5), ylim = c(-5.5, 5.5))
-#   zscore_axis_limits(c(-3, 5), c(-1, 2), linked_axes = FALSE)
+#   beta_axis_limits(c(-3, 5), c(-1, 2), linked_axes = FALSE)
 #   # -> list(xlim = c(-5.5, 5.5), ylim = c(-2.2, 2.2))
-zscore_axis_limits <- function(x_vals, y_vals, linked_axes = TRUE, pad = 1.1) {
+beta_axis_limits <- function(x_vals, y_vals, linked_axes = TRUE, pad = 1.1) {
   lim_from <- function(v) {
     m <- max(abs(v), na.rm = TRUE)
     if (!is.finite(m) || m <= 0) m <- 1
@@ -68,26 +73,26 @@ zscore_axis_limits <- function(x_vals, y_vals, linked_axes = TRUE, pad = 1.1) {
   }
 }
 
-# plot_zscore_df(): scatter QTL Z vs disease Z from an in-memory table (uniform
-# blue points, no Z-based colour scale). Optional panel_cs_label becomes subtitle.
+# plot_beta_scatter_df(): scatter QTL beta vs disease beta from an in-memory table
+# (uniform blue points, no colour scale). Optional panel_cs_label becomes subtitle.
 #
 # Example:
-#   plot_zscore_df(data.frame(z_qtl = 1:3, z_disease = 3:1), "Z | cell | g\n[M]")
+#   plot_beta_scatter_df(data.frame(beta_qtl = 1:3, beta_disease = 3:1), "Beta | cell | g\n[M]")
 #   # -> ggplot with diagonals and dashed zero lines (linked axes).
-#   plot_zscore_df(..., linked_axes = FALSE)
+#   plot_beta_scatter_df(..., linked_axes = FALSE)
 #   # -> x and y limits from each column separately.
-plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL,
-                           linked_axes = TRUE) {
+plot_beta_scatter_df <- function(df, title = "Coloc Betas", panel_cs_label = NULL,
+                                 linked_axes = TRUE) {
   if (is.null(df) || nrow(df) == 0L) return(plot_spacer())
   nms <- names(df)
-  cols <- resolve_zscore_columns(nms)
+  cols <- resolve_beta_columns(nms)
   qtl_col <- cols$qtl_col
   dis_col <- cols$dis_col
   if (is.na(qtl_col) || is.na(dis_col) || !nzchar(qtl_col) || !nzchar(dis_col)) {
-    cat("Warning: Could not identify Z-score columns in supplied data.frame\n")
+    cat("Warning: Could not identify beta columns in supplied data.frame\n")
     return(plot_spacer())
   }
-  lims <- zscore_axis_limits(df[[qtl_col]], df[[dis_col]], linked_axes = linked_axes)
+  lims <- beta_axis_limits(df[[qtl_col]], df[[dis_col]], linked_axes = linked_axes)
   p <- ggplot(df, aes(x = .data[[qtl_col]], y = .data[[dis_col]])) +
     geom_hline(yintercept = 0, color = "black", linetype = "dashed", alpha = 0.5) +
     geom_vline(xintercept = 0, color = "black", linetype = "dashed", alpha = 0.5) +
@@ -102,7 +107,7 @@ plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL,
   }
   p <- p +
     theme_minimal() +
-    labs(title = title, x = "QTL Z-Score", y = "Disease Z-Score") +
+    labs(title = title, x = "QTL Beta", y = "Disease Beta") +
     theme(plot.title  = element_text(size = 10, face = "bold"),
           plot.subtitle = element_text(size = 7, hjust = 0),
           axis.title  = element_text(size = 10, face = "bold"),
@@ -124,52 +129,52 @@ plot_zscore_df <- function(df, title = "Coloc Z-Scores", panel_cs_label = NULL,
   p
 }
 
-# plot_zscore(): read a Z-score CSV and draw one scatter (see plot_zscore_df()).
+# plot_beta_scatter(): read a beta CSV and draw one scatter (see plot_beta_scatter_df()).
 #
 # Example:
-#   plot_zscore("icd10_j15_zscore_merge_notnull.csv", "Coloc Z-Scores\n[M_18448]")
+#   plot_beta_scatter("icd10_j15_beta_merge_notnull.csv", "Coloc Betas\n[M_18448]")
 #   # -> ggplot with diagonals and dashed zero lines.
-plot_zscore <- function(z_file, title = "Coloc Z-Scores", linked_axes = TRUE) {
-  if (is.na(z_file) || z_file == "NA" || !file.exists(z_file)) {
-    if (!is.na(z_file) && z_file != "NA") cat(sprintf("Warning: Z-score file not found at %s\n", z_file))
+plot_beta_scatter <- function(beta_file, title = "Coloc Betas", linked_axes = TRUE) {
+  if (is.na(beta_file) || beta_file == "NA" || !file.exists(beta_file)) {
+    if (!is.na(beta_file) && beta_file != "NA") cat(sprintf("Warning: beta file not found at %s\n", beta_file))
     return(plot_spacer())
   }
-  df <- fread(z_file)
-  plot_zscore_df(df, title, panel_cs_label = NULL, linked_axes = linked_axes)
+  df <- fread(beta_file)
+  plot_beta_scatter_df(df, title, panel_cs_label = NULL, linked_axes = linked_axes)
 }
 
-# build_zscore_column(): one or more Z panels from the module Z table — split by
+# build_beta_column(): one or more beta panels from the module beta table — split by
 # cs_qtl when multiple values exist; if this_cs matches a cs_qtl row, only that
 # subset is drawn for this grid row.
 #
 # Example:
-#   z <- data.table::fread(text = "snp,z_disease,cs_qtl,z_qtl\na,1,c1,2\nb,-1,c2,-2")
-#   build_zscore_column(z, "Coloc Z | cell | g\n[M]", this_cs = NA_character_)
+#   z <- data.table::fread(text = "snp,beta_disease,cs_qtl,beta_qtl\na,1,c1,2\nb,-1,c2,-2")
+#   build_beta_column(z, "Coloc Beta | cell | g\n[M]", this_cs = NA_character_)
 #   # -> patchwork column with two stacked scatters (c1 and c2).
-build_zscore_column <- function(z_tbl, title, this_cs = NA_character_,
-                                linked_axes = TRUE) {
+build_beta_column <- function(z_tbl, title, this_cs = NA_character_,
+                              linked_axes = TRUE) {
   if (is.null(z_tbl) || nrow(z_tbl) == 0L) return(plot_spacer())
-  if (!"cs_qtl" %in% names(z_tbl)) return(plot_zscore_df(z_tbl, title, linked_axes = linked_axes))
+  if (!"cs_qtl" %in% names(z_tbl)) return(plot_beta_scatter_df(z_tbl, title, linked_axes = linked_axes))
   keys <- unique(stats::na.omit(as.character(z_tbl[["cs_qtl"]])))
   keys <- keys[nzchar(keys)]
-  if (length(keys) == 0L) return(plot_zscore_df(z_tbl, title, linked_axes = linked_axes))
+  if (length(keys) == 0L) return(plot_beta_scatter_df(z_tbl, title, linked_axes = linked_axes))
   this_cs <- as.character(this_cs)
   matched <- (!is.na(this_cs) && length(this_cs) == 1L && nzchar(this_cs) &&
               this_cs %in% keys)
   if (matched) {
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == this_cs)
-    return(plot_zscore_df(sub, title, panel_cs_label = this_cs,
-                          linked_axes = linked_axes))
+    return(plot_beta_scatter_df(sub, title, panel_cs_label = this_cs,
+                                linked_axes = linked_axes))
   }
   if (length(keys) == 1L) {
     k1 <- keys[[1]]
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == k1)
-    return(plot_zscore_df(sub, title, panel_cs_label = k1,
-                          linked_axes = linked_axes))
+    return(plot_beta_scatter_df(sub, title, panel_cs_label = k1,
+                                linked_axes = linked_axes))
   }
   pieces <- lapply(keys, function(k) {
     sub <- dplyr::filter(z_tbl, as.character(.data[["cs_qtl"]]) == k)
-    plot_zscore_df(sub, title, panel_cs_label = k, linked_axes = linked_axes)
+    plot_beta_scatter_df(sub, title, panel_cs_label = k, linked_axes = linked_axes)
   })
   wrap_plots(pieces, ncol = 1L) +
     patchwork::plot_layout(heights = rep(1, length(pieces)))

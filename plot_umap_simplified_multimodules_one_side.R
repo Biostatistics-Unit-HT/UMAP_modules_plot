@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
-# Single-population UMAP / optional LocusZoom / optional Coloc-Z-score plot.
-# Per credible set the grid row is: [optional LocusZoom] -> UMAP (beta or expression) -> [optional Coloc Z].
+# Single-population UMAP / optional LocusZoom / optional Coloc-beta plot.
+# Per credible set the grid row is: [optional LocusZoom] -> UMAP (beta or expression) -> [optional Coloc Beta].
 
 suppressPackageStartupMessages({
   library(ggplot2)
@@ -36,10 +36,10 @@ for (f in sort(list.files(file.path(script_dir, "R"),
 }
 # Ensure plot_beta() is the version shipped with this script (e.g. label_cells_only).
 source(file.path(script_dir, "R", "11_plot_beta.R"), local = FALSE)
-# Same for Z-score helpers (build_zscore_column, plot_zscore_df).
+# Same for beta-scatter helpers (build_beta_column, plot_beta_scatter_df).
 source(file.path(script_dir, "R", "12_plot_zscore.R"), local = FALSE)
-if (!exists("build_zscore_column", mode = "function"))
-  stop("R/12_plot_zscore.R must define build_zscore_column(); refresh that file from the repo.")
+if (!exists("build_beta_column", mode = "function"))
+  stop("R/12_plot_zscore.R must define build_beta_column(); refresh that file from the repo.")
 
 # --- CLI Options ---
 option_list <- list(
@@ -76,10 +76,13 @@ option_list <- list(
   
   # Optional per-module side panels
   make_option("--summary_table", type = "character", default = NULL, help = "Path to Summary Table (for disease titles)"),
-  make_option("--z_files", type = "character", default = NULL, help = "Comma-separated paths to Z-Score CSVs (use NA for missing). Columns: z_qtl vs z_disease (or z_icd10*); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked Z panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
-  make_option("--z_axes", type = "character", default = "linked",
-              help = "Coloc Z-score panel axis scaling: 'linked' (default) uses the same symmetric limits on QTL-Z and disease-Z from max(|Z|) over both columns with coord_fixed; 'independent' sets each axis from max(|Z|) in that column only (coord_cartesian)."),
-  make_option("--lz_files", type = "character", default = NULL, help = "Optional comma-separated LocusZoom CSVs (use NA for missing) when you want LocusZoom panels. Omit when using --umap + --master + --modules: credible sets come from the master table only. Expected columns: CHR,CELL,GENE,POS,P. Coloc Z tables belong in --z_files."),
+  make_option("--beta_files", type = "character", default = NULL, help = "Comma-separated paths to Coloc Beta CSVs (use NA for missing). Columns: beta_qtl vs beta_disease (legacy z_qtl / z_disease / z_icd10* still accepted); optional snp, cs_qtl. Multiple distinct cs_qtl values -> stacked beta panels; if a grid row's CS matches cs_qtl, only that subset is plotted for that row."),
+  make_option("--z_files", type = "character", default = NULL, help = "Deprecated alias for --beta_files (kept for backward compatibility)."),
+  make_option("--beta_axes", type = "character", default = NULL,
+              help = "Coloc Beta panel axis scaling: 'linked' (default) uses the same symmetric limits on QTL-beta and disease-beta from max(|beta|) over both columns with coord_fixed; 'independent' sets each axis from max(|beta|) in that column only (coord_cartesian)."),
+  make_option("--z_axes", type = "character", default = NULL,
+              help = "Deprecated alias for --beta_axes (kept for backward compatibility)."),
+  make_option("--lz_files", type = "character", default = NULL, help = "Optional comma-separated LocusZoom CSVs (use NA for missing) when you want LocusZoom panels. Omit when using --umap + --master + --modules: credible sets come from the master table only. Expected columns: CHR,CELL,GENE,POS,P. Coloc Beta tables belong in --beta_files."),
   make_option("--lz_layout", type = "character", default = "stacked",
               help = "LocusZoom layout: 'stacked' (one row per credible set) or 'merged' (single panel, all CS overlaid; LZ-only, no beta UMAP or Z). Merged adds a bottom strip (genomic span per CS, same Mb axis)."),
   make_option("--lz_xlim", type = "character", default = "context",
@@ -112,6 +115,20 @@ option_list <- list(
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
+# --beta_files / --beta_axes are the current names; --z_files / --z_axes are
+# kept as deprecated aliases. Prefer the beta-named flag, then fall back to the
+# z-named one, then to the default. Downstream code keeps using opt$z_files /
+# opt$z_axes as the internal names.
+if (!is.null(opt$beta_files) && !(length(opt$beta_files) == 1L && is.na(opt$beta_files[[1L]]))) {
+  opt$z_files <- opt$beta_files
+}
+beta_axes_set <- !is.null(opt$beta_axes) &&
+  !(length(opt$beta_axes) == 1L && is.na(opt$beta_axes[[1L]]))
+if (beta_axes_set) {
+  opt$z_axes <- opt$beta_axes
+} else if (is.null(opt$z_axes) || (length(opt$z_axes) == 1L && is.na(opt$z_axes[[1L]]))) {
+  opt$z_axes <- "linked"
+}
 # optparse may leave unused character flags as NA (length-1) rather than NULL;
 # treat those as "not provided" so LZ-only runs never hit fread(opt$umap).
 opt$umap    <- if (is.null(opt$umap) || length(opt$umap) == 0L ||
@@ -207,7 +224,7 @@ lz_layout_val <- tolower(trimws(opt$lz_layout))
 if (!lz_layout_val %in% c("stacked", "merged"))
   stop("--lz_layout must be 'stacked' or 'merged'.")
 if (lz_layout_val == "merged" && (has_umap_panel || has_z)) {
-  cat("Warning: --lz_layout merged applies only to LocusZoom-only runs (no UMAP panel, no --z_files); using stacked.\n")
+  cat("Warning: --lz_layout merged applies only to LocusZoom-only runs (no UMAP panel, no --beta_files); using stacked.\n")
   lz_layout_val <- "stacked"
 }
 use_lz_merged <- has_lz && lz_layout_val == "merged" && !has_umap_panel && !has_z
@@ -269,7 +286,7 @@ n_items <- length(mods)
 
 if (has_z) {
   z_files <- trimws(unlist(strsplit(opt$z_files, ",")))
-  if (length(z_files) != n_items) stop("--z_files must have the same number of items as --modules (or --lz_files when --modules is omitted).")
+  if (length(z_files) != n_items) stop("--beta_files must have the same number of items as --modules (or --lz_files when --modules is omitted).")
 }
 if (has_lz) {
   lz_files <- trimws(unlist(strsplit(opt$lz_files, ",")))
@@ -331,7 +348,7 @@ if (has_umap) {
 # meta already loaded when has_master (see module list above).
 module_composites <- list()  # one patchwork per module (CS grid + merged box)
 total_cs_rows     <- 0L
-# Column layout: LZ, optional UMAP (beta or expression), optional Coloc Z.
+# Column layout: LZ, optional UMAP (beta or expression), optional Coloc Beta.
 cols <- as.integer(has_lz) + as.integer(has_umap_panel) + as.integer(has_z)
 if (cols == 0)
   stop("Nothing to plot (no LZ, no UMAP panel, no Z).")
@@ -377,7 +394,7 @@ for (i in seq_len(n_items)) {
   
   # --- enumerate credible sets for this module (from LZ CS column when
   # available, otherwise fall back to (cell, gene) in master). Each CS
-  # produces one grid row of [LocusZoom | Beta UMAP | optional Coloc Z].
+  # produces one grid row of [LocusZoom | Beta UMAP | optional Coloc Beta].
   lz_path  <- if (has_lz) lz_files[i] else NULL
   if (manual_mode) {
     # In manual mode we don't have a master annotation to enumerate
@@ -923,8 +940,8 @@ for (i in seq_len(n_items)) {
       module_plots[[length(module_plots) + 1]] <- plot_spacer()
     }
     if (has_z) {
-      module_plots[[length(module_plots) + 1]] <- build_zscore_column(
-        z_tbl_mod, "Coloc Z-Scores", this_cs = this_cs,
+      module_plots[[length(module_plots) + 1]] <- build_beta_column(
+        z_tbl_mod, "Coloc Betas", this_cs = this_cs,
         linked_axes = z_linked_axes)
     }
   }
@@ -938,7 +955,7 @@ for (i in seq_len(n_items)) {
   # than the other side panels (beta UMAP, Z-score) but with enough room for
   # its multi-line title and gene track to lay out cleanly. The figure-wide
   # plot_width below scales by sum(col_widths) so the other panels actually
-  # close the gap instead of leaving empty horizontal space (beta + z-score
+  # close the gap instead of leaving empty horizontal space (beta UMAP + coloc-beta
   # use coord_equal()/coord_fixed() and can't grow into the slack).
   col_widths <- rep(1, cols)
   if (has_lz) col_widths[1] <- 1.2

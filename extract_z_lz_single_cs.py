@@ -1,11 +1,11 @@
-# Program to extract z-scores and p-values from a single credible set.
+# Program to extract effect sizes (BETA) and p-values from a single credible set.
 import subprocess
 import sys
 
 import pandas as pd
 import click
 import cloup
-from utils.functions import parse_adata, extract_region, query_tiledb, calculate_ld, extract_z_adata
+from utils.functions import parse_adata, extract_region, query_tiledb, calculate_ld, extract_beta_adata
 
 
 def _tabix_region(gz_path, chrom, start, end):
@@ -51,16 +51,23 @@ def _tabix_region(gz_path, chrom, start, end):
     )
 
 
-def extract_z_gz(gz_path, chrom, start, end):
-    """Disease Z-scores from a tabix-indexed sumstats file.
+def extract_beta_gz(gz_path, chrom, start, end):
+    """Disease BETA (effect size) from a tabix-indexed sumstats file.
 
     Expected columns (tab-separated, header starting '#chrom'):
         chrom pos ref alt rsids nearest_genes pval mlogp beta sebeta af_alt ...
 
-    Returns a DataFrame [SNPID, z_disease] where SNPID is 'chr<c>:<pos>:<ref>:<alt>'
-    to match the TileDB QTL SNPIDs. Both allele orientations are emitted (the
-    flipped one with a negated Z) so the downstream merge matches regardless of
-    which strand/orientation the sumstats used.
+    Returns a DataFrame [SNPID, beta_disease] where SNPID is
+    'chr<c>:<pos>:<ref>:<alt>' to match the TileDB QTL SNPIDs. Both allele
+    orientations are emitted (the flipped one with a negated BETA) so the
+    downstream merge matches regardless of which strand/orientation the
+    sumstats used.
+
+    Example:
+        extract_beta_gz("gwas.tsv.gz", chrom=22, start=17600000, end=17610000)
+        # ->            SNPID  beta_disease
+        #   0  chr22:17604981:C:T          0.12
+        #   1  chr22:17604981:T:C         -0.12
     """
     rows = []
     for line in _tabix_region(gz_path, chrom, start, end):
@@ -85,7 +92,7 @@ def extract_z_gz(gz_path, chrom, start, end):
             f"No usable rows in {gz_path} for region {chrom}:{start}-{end}"
         )
 
-    df = pd.DataFrame(rows, columns=["SNPID", "beta"])
+    df = pd.DataFrame(rows, columns=["SNPID", "beta_disease"])
     # A palindromic SNP can produce the same SNPID twice; keep the first.
     return df.drop_duplicates(subset=["SNPID"], keep="first")
 
@@ -117,17 +124,10 @@ def extract_z_gz(gz_path, chrom, start, end):
     help="Bgzipped + tabix-indexed disease summary statistics (.gz with a .tbi "
          "alongside). Columns: chrom pos ref alt rsids nearest_genes pval mlogp "
          "beta sebeta af_alt ... Takes precedence over --dis_adata when both are "
-         "given. Z is computed as beta/sebeta.",
+         "given. The disease effect size used is the raw BETA.",
 )
 @cloup.option(
     "--ld_file", type=str, default=None, help="Path plink genomics file to calculate LD"
-)
-@cloup.option(
-    "--z_from_beta",
-    is_flag=True,
-    default=False,
-    help="Use raw BETA as the QTL Z-score instead of BETA/SE (restores the old, "
-         "incorrect behaviour; for debugging only).",
 )
 @cloup.option("--out", type=str, help="Prefix for the output files")
 def cli(
@@ -138,7 +138,6 @@ def cli(
     qtl_module,
     tiledb_path,
     ld_file,
-    z_from_beta,
     out,
 ):
     """Extract all the files necessary to plot UMAPs from single credible set"""
@@ -158,43 +157,39 @@ def cli(
     calculate_ld(df_snps=snps_plink, out_file=out, plink_file=ld_file)
 
     if not (dis_gz or dis_adata):
-        print("No --dis_gz or --dis_adata given; skipping Z-score extraction.")
+        print("No --dis_gz or --dis_adata given; skipping beta extraction.")
         return
 
     qtl_adata_lz = pd_cs_qtl.copy()
-    if z_from_beta:
-        print("WARNING: --z_from_beta set; z_qtl is the raw BETA, not BETA/SE.")
-        qtl_adata_lz["z_qtl"] = qtl_adata_lz["BETA"]
-    else:
-        qtl_adata_lz["z_qtl"] = qtl_adata_lz["BETA"] / qtl_adata_lz["SE"]
+    qtl_adata_lz["beta_qtl"] = qtl_adata_lz["BETA"]
 
     if dis_gz:
-        print(f"Disease Z from tabix sumstats: {dis_gz}")
-        disease_zscore = extract_z_gz(
+        print(f"Disease beta from tabix sumstats: {dis_gz}")
+        disease_beta = extract_beta_gz(
             dis_gz, coord.chrom_num, coord.start, coord.end
         )
     else:
-        print(f"Disease Z from anndata: {dis_adata} (cs={dis_cs})")
+        print(f"Disease beta from anndata: {dis_adata} (cs={dis_cs})")
         adata_dis = parse_adata(adata=dis_adata, cs_name=dis_cs)
-        disease_zscore = extract_z_adata(adata=adata_dis, chrom=coord.chrom_num)
+        disease_beta = extract_beta_adata(adata=adata_dis, chrom=coord.chrom_num)
 
-    merged = disease_zscore.merge(qtl_adata_lz, on="SNPID")
+    merged = disease_beta.merge(qtl_adata_lz, on="SNPID")
     print(
         f"Region {coord.chrom_num}:{coord.start}-{coord.end} | "
-        f"QTL SNPs={len(qtl_adata_lz)} disease SNPs={len(disease_zscore)} "
+        f"QTL SNPs={len(qtl_adata_lz)} disease SNPs={len(disease_beta)} "
         f"merged={len(merged)}"
     )
     if merged.empty:
         print(f"  sample QTL SNPID:     {qtl_adata_lz['SNPID'].iloc[0]}")
-        print(f"  sample disease SNPID: {disease_zscore['SNPID'].iloc[0]}")
+        print(f"  sample disease SNPID: {disease_beta['SNPID'].iloc[0]}")
         sys.exit("ERROR: no SNPs shared between QTL and disease (ID format mismatch?)")
 
     keep = merged[
-        merged["z_disease"].notna() & (merged["z_disease"] != 0)
-        & merged["z_qtl"].notna() & (merged["z_qtl"] != 0)
+        merged["beta_disease"].notna() & (merged["beta_disease"] != 0)
+        & merged["beta_qtl"].notna() & (merged["beta_qtl"] != 0)
     ].copy()
-    print(f"  {len(keep)} SNPs with non-zero Z in both.")
-    keep.to_csv(f"{out}_zscores.csv", index=False, mode="w", header=True)
+    print(f"  {len(keep)} SNPs with non-zero beta in both.")
+    keep.to_csv(f"{out}_betas.csv", index=False, mode="w", header=True)
 
 
 if __name__ == "__main__":

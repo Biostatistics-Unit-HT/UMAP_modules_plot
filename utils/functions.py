@@ -72,7 +72,19 @@ def calculate_ld(df_snps: pd.DataFrame, out_file: str, plink_file: str):
         os.remove(tmp_file)
 
 
-def extract_z_adata(adata: ad.AnnData, chrom: int) -> pd.DataFrame:
+def extract_beta_adata(adata: ad.AnnData, chrom: int) -> pd.DataFrame:
+    """Extract the disease per-SNP BETA over the credible-set region from an anndata.
+
+    The disease effect size used downstream is the raw BETA (not BETA/SE), so the
+    coloc panel compares QTL beta vs disease beta.
+
+    Example:
+        # adata with layers["beta"] and var columns chr/pos/snp
+        extract_beta_adata(adata, chrom=22)
+        # ->            SNPID  beta_disease
+        #   0  chr22:17604981:C:T          0.12
+        #   1  chr22:17605100:G:A         -0.04
+    """
     start = adata.obs["start"].iloc[0]
     end = adata.obs["end"].iloc[0]
     adata.var["pos"] = adata.var["pos"].astype(int)
@@ -83,16 +95,8 @@ def extract_z_adata(adata: ad.AnnData, chrom: int) -> pd.DataFrame:
         & (adata.var["pos"] < end)
     )
     disease_adata_obs_var = adata[:, mask_var]
-    # FIX: Safe division to prevent 0-division errors
     beta_dis = disease_adata_obs_var.layers["beta"].toarray()[0]
-    se_dis = disease_adata_obs_var.layers["se"].toarray()[0]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        #z_disease = np.true_divide(beta_dis, se_dis)
-        z_disease = beta_dis
-        #z_disease[~np.isfinite(z_disease)] = (
-        #    np.nan
-        #)  # Converts inf/zero-division results to NaN
-    disease_adata_zscore = pd.DataFrame(
-        {"SNPID": disease_adata_obs_var.var["snp"], "z_disease": z_disease}
+    disease_beta = pd.DataFrame(
+        {"SNPID": disease_adata_obs_var.var["snp"], "beta_disease": beta_dis}
     )
-    return disease_adata_zscore
+    return disease_beta
